@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "profile": "typescript-cli",
+  "tiers": {
+    "fast": ["format:check", "lint", "typecheck", "test:unit"],
+    "integration": [],
+    "e2e": []
+  },
+  "requiredCapabilities": ["format:check", "lint", "typecheck", "test:unit"],
+  "optionalCapabilities": []
+}

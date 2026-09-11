@@ -1,0 +1,9 @@
+schema_version = 1
+id = "moritzbrantner/coding-harness"
+kind = "infrastructure"
+status = "active"
+summary = "Personal orchestration harness for deterministic repository inspection, layered validation, convergence, and evidence capture."
+depends_on = ["moritzbrantner/coding-tooling"]
+consumed_by = []
+supersedes = []
+replaced_by = []
