@@ -29,5 +29,10 @@ jobs:
           bun-version: 1.4.0
       - name: Install dependencies reproducibly
         run: bun install --frozen-lockfile
+      - name: Show formatting diff
+        shell: bash
+        run: |
+          bun run format:write
+          git diff --exit-code
       - name: Check
-        run: bun run check
+        run: bun run lint && bun run typecheck && bun run test
