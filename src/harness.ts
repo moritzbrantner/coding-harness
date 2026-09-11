@@ -4,6 +4,7 @@ import type {
   CommandExecution,
   CommandRunner,
   LayerEvidence,
+  ProcessEvidence,
   RepositoryEvidence,
   ResultStatus,
   ToolEnvelope,
@@ -43,6 +44,10 @@ function isResultStatus(value: unknown): value is ResultStatus {
   return value === "passed" || value === "failed" || value === "unavailable" || value === "error";
 }
 
+function isToolEnvelope(value: unknown): value is ToolEnvelope {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function unavailableLayer(
   id: string,
   command: string[],
@@ -65,9 +70,9 @@ export function layerEvidence(
 ): LayerEvidence {
   if (execution.error) return unavailableLayer(id, command, execution);
 
-  let output: ToolEnvelope;
+  let parsed: unknown;
   try {
-    output = JSON.parse(execution.stdout) as ToolEnvelope;
+    parsed = JSON.parse(execution.stdout) as unknown;
   } catch {
     return {
       id,
@@ -79,6 +84,18 @@ export function layerEvidence(
     };
   }
 
+  if (!isToolEnvelope(parsed)) {
+    return {
+      id,
+      command,
+      exitCode: execution.exitCode,
+      status: "error",
+      stderr: execution.stderr || undefined,
+      error: "coding-tooling did not return a JSON object envelope",
+    };
+  }
+
+  const output = parsed;
   if (!isResultStatus(output.status)) {
     return {
       id,
@@ -113,25 +130,46 @@ export function layerEvidence(
   };
 }
 
+function processEvidence(
+  command: string,
+  args: string[],
+  execution: CommandExecution,
+): ProcessEvidence {
+  return {
+    command: [command, ...args],
+    exitCode: execution.exitCode,
+    stdout: execution.stdout,
+    stderr: execution.stderr,
+    error: execution.error,
+  };
+}
+
 export function repositoryEvidence(root: string, runCommand: CommandRunner): RepositoryEvidence {
-  const head = runCommand("git", ["rev-parse", "HEAD"], root);
+  const executions: ProcessEvidence[] = [];
+  const headArgs = ["rev-parse", "HEAD"];
+  const head = runCommand("git", headArgs, root);
+  executions.push(processEvidence("git", headArgs, head));
   if (head.error || head.exitCode !== 0) {
     return {
       root,
       head: null,
       clean: null,
       statusPorcelain: [],
+      executions,
       error: head.error ?? (head.stderr.trim() || "Could not resolve repository HEAD"),
     };
   }
 
-  const status = runCommand("git", ["status", "--porcelain=v1"], root);
+  const statusArgs = ["status", "--porcelain=v1"];
+  const status = runCommand("git", statusArgs, root);
+  executions.push(processEvidence("git", statusArgs, status));
   if (status.error || status.exitCode !== 0) {
     return {
       root,
       head: head.stdout.trim(),
       clean: null,
       statusPorcelain: [],
+      executions,
       error: status.error ?? (status.stderr.trim() || "Could not inspect repository worktree"),
     };
   }
@@ -142,6 +180,7 @@ export function repositoryEvidence(root: string, runCommand: CommandRunner): Rep
     head: head.stdout.trim(),
     clean: statusPorcelain.length === 0,
     statusPorcelain,
+    executions,
   };
 }
 

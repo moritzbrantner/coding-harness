@@ -16,6 +16,10 @@ export type CommandExecution = {
   error?: string;
 };
 
+export type ProcessEvidence = CommandExecution & {
+  command: string[];
+};
+
 export type LayerEvidence = {
   id: string;
   command: string[];
@@ -31,6 +35,7 @@ export type RepositoryEvidence = {
   head: string | null;
   clean: boolean | null;
   statusPorcelain: string[];
+  executions: ProcessEvidence[];
   error?: string;
 };
 
@@ -47,8 +52,4 @@ export type ValidationReport = {
   stoppedAt: string | null;
 };
 
-export type CommandRunner = (
-  command: string,
-  args: string[],
-  cwd: string,
-) => CommandExecution;
+export type CommandRunner = (command: string, args: string[], cwd: string) => CommandExecution;

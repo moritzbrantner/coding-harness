@@ -29,8 +29,7 @@ function fakeRunner(statusByLayer: Partial<Record<string, ResultStatus>> = {}): 
     calls.push([command, ...args]);
     if (command === "git" && args[0] === "rev-parse")
       return { exitCode: 0, stdout: "0123456789abcdef\n", stderr: "" };
-    if (command === "git" && args[0] === "status")
-      return { exitCode: 0, stdout: "", stderr: "" };
+    if (command === "git" && args[0] === "status") return { exitCode: 0, stdout: "", stderr: "" };
 
     const layer = validationLayers[toolingIndex++];
     assert.ok(layer);
@@ -41,12 +40,23 @@ function fakeRunner(statusByLayer: Partial<Record<string, ResultStatus>> = {}): 
 
 test("runs the validation layers in deterministic order", () => {
   const { run, calls } = fakeRunner();
-  const report = validateRepository("/repo", { command: "coding-tooling", prefixArgs: [] }, { runCommand: run });
+  const report = validateRepository(
+    "/repo",
+    { command: "coding-tooling", prefixArgs: [] },
+    { runCommand: run },
+  );
 
   assert.equal(report.status, "passed");
   assert.equal(report.stoppedAt, null);
   assert.equal(report.repository.head, "0123456789abcdef");
   assert.equal(report.repository.clean, true);
+  assert.deepEqual(
+    report.repository.executions.map((item) => item.command),
+    [
+      ["git", "rev-parse", "HEAD"],
+      ["git", "status", "--porcelain=v1"],
+    ],
+  );
   assert.deepEqual(
     report.layers.map((layer) => layer.id),
     validationLayers.map((layer) => layer.id),
@@ -56,16 +66,18 @@ test("runs the validation layers in deterministic order", () => {
 
 test("fails closed and stops after the first non-passing layer", () => {
   const { run } = fakeRunner({ integration: "failed" });
-  const report = validateRepository("/repo", { command: "coding-tooling", prefixArgs: [] }, { runCommand: run });
+  const report = validateRepository(
+    "/repo",
+    { command: "coding-tooling", prefixArgs: [] },
+    { runCommand: run },
+  );
 
   assert.equal(report.status, "failed");
   assert.equal(report.stoppedAt, "integration");
-  assert.deepEqual(report.layers.map((layer) => layer.id), [
-    "discovery",
-    "conformance",
-    "fast",
-    "integration",
-  ]);
+  assert.deepEqual(
+    report.layers.map((layer) => layer.id),
+    ["discovery", "conformance", "fast", "integration"],
+  );
 });
 
 test("records a dirty worktree without pretending it is an exact clean-head run", () => {
@@ -80,13 +92,17 @@ test("records a dirty worktree without pretending it is an exact clean-head run"
     return execution("passed", layer.id);
   };
 
-  const report = validateRepository("/repo", { command: "coding-tooling", prefixArgs: [] }, { runCommand: run });
+  const report = validateRepository(
+    "/repo",
+    { command: "coding-tooling", prefixArgs: [] },
+    { runCommand: run },
+  );
   assert.equal(report.status, "passed");
   assert.equal(report.repository.clean, false);
   assert.deepEqual(report.repository.statusPorcelain, [" M src/example.ts", "?? scratch.txt"]);
 });
 
-test("rejects malformed or exit-status-inconsistent tooling evidence", () => {
+test("rejects malformed, non-object, and exit-status-inconsistent tooling evidence", () => {
   const malformed = layerEvidence("discovery", ["coding-tooling", "inspect", "--json"], {
     exitCode: 0,
     stdout: "not json",
@@ -94,12 +110,35 @@ test("rejects malformed or exit-status-inconsistent tooling evidence", () => {
   });
   assert.equal(malformed.status, "error");
 
+  const nullEnvelope = layerEvidence("discovery", ["coding-tooling", "inspect", "--json"], {
+    exitCode: 0,
+    stdout: "null",
+    stderr: "",
+  });
+  assert.equal(nullEnvelope.status, "error");
+  assert.equal(nullEnvelope.error, "coding-tooling did not return a JSON object envelope");
+
   const mismatch = layerEvidence("discovery", ["coding-tooling", "inspect", "--json"], {
     exitCode: 0,
     stdout: JSON.stringify({ status: "failed" }),
     stderr: "",
   });
   assert.equal(mismatch.status, "error");
+});
+
+test("preserves exit evidence for Git repository inspection", () => {
+  const { run } = fakeRunner();
+  const report = validateRepository(
+    "/repo",
+    { command: "coding-tooling", prefixArgs: [] },
+    { runCommand: run },
+  );
+
+  assert.deepEqual(
+    report.repository.executions.map((item) => item.exitCode),
+    [0, 0],
+  );
+  assert.equal(report.repository.executions[0]?.stdout, "0123456789abcdef\n");
 });
 
 test("reports missing coding-tooling as unavailable", () => {
