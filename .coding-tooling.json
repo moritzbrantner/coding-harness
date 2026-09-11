@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "profile": "typescript-cli",
+  "tiers": {
+    "fast": ["test:unit"],
+    "integration": [],
+    "e2e": []
+  },
+  "requiredCapabilities": ["test:unit"],
+  "optionalCapabilities": []
+}
