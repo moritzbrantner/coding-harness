@@ -7,9 +7,22 @@
     "coding-harness": "./src/entry.ts"
   },
   "scripts": {
+    "format": "oxfmt --check .",
+    "format:check": "oxfmt --check .",
+    "format:write": "oxfmt .",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint --fix .",
+    "typecheck": "bun node_modules/typescript/bin/tsc --noEmit",
     "test": "bun test",
     "test:unit": "bun test",
-    "check": "bun test"
+    "check": "bun run format:check && bun run lint && bun run typecheck && bun run test"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.0",
+    "@typescript/typescript6": "6.0.2",
+    "oxfmt": "0.65.0",
+    "oxlint": "1.80.0",
+    "typescript": "7.0.2"
   },
   "engines": {
     "bun": ">=1.4.0"

@@ -13,7 +13,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  check:
+    name: Check / ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -26,5 +27,7 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.0
-      - name: Test
-        run: bun test
+      - name: Install dependencies reproducibly
+        run: bun install --frozen-lockfile
+      - name: Check
+        run: bun run check
