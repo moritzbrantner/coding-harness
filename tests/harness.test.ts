@@ -98,7 +98,7 @@ test("runs workflow validation after integration and before e2e", () => {
     report.layers.map((layer) => layer.id),
     ["discovery", "conformance", "fast", "integration", "workflow"],
   );
-  assert.deepEqual(calls.at(-1), [
+  assert.deepEqual(calls[calls.length - 1], [
     "coding-tooling",
     "run",
     "--tier",
