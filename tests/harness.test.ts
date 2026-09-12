@@ -225,6 +225,8 @@ test("converges first and validates the resulting worktree", () => {
   assert.equal(report.repositoryBefore.clean, true);
   assert.deepEqual(report.convergence?.command, ["coding-tooling", "converge", "--json"]);
   assert.equal(report.convergence?.status, "passed");
+  assert.equal(report.repositoryAfter?.clean, false);
+  assert.deepEqual(report.repositoryAfter?.statusPorcelain, [" M src/generated.ts"]);
   assert.equal(report.validation?.status, "passed");
   assert.equal(report.validation?.repository.clean, false);
   assert.deepEqual(report.validation?.repository.statusPorcelain, [" M src/generated.ts"]);
@@ -232,7 +234,7 @@ test("converges first and validates the resulting worktree", () => {
     report.validation?.layers.map((layer) => layer.id),
     validationLayers.map((layer) => layer.id),
   );
-  assert.equal(calls.length, validationLayers.length + 5);
+  assert.equal(calls.length, validationLayers.length + 7);
 });
 
 test("does not validate after a failed convergence operation", () => {
@@ -246,17 +248,26 @@ test("does not validate after a failed convergence operation", () => {
   assert.equal(report.status, "failed");
   assert.equal(report.stoppedAt, "converge");
   assert.equal(report.convergence?.status, "failed");
+  assert.equal(report.repositoryAfter?.clean, false);
   assert.equal(report.validation, null);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 5);
 });
 
 test("does not validate malformed convergence evidence", () => {
   const calls: string[][] = [];
+  let gitStatusCount = 0;
   const run: CommandRunner = (command, args) => {
     calls.push([command, ...args]);
     if (command === "git" && args[0] === "rev-parse")
       return { exitCode: 0, stdout: "0123456789abcdef\n", stderr: "" };
-    if (command === "git" && args[0] === "status") return { exitCode: 0, stdout: "", stderr: "" };
+    if (command === "git" && args[0] === "status") {
+      gitStatusCount += 1;
+      return {
+        exitCode: 0,
+        stdout: gitStatusCount === 1 ? "" : " M src/partial.ts\n",
+        stderr: "",
+      };
+    }
     return { exitCode: 0, stdout: "not json", stderr: "" };
   };
 
@@ -269,6 +280,7 @@ test("does not validate malformed convergence evidence", () => {
   assert.equal(report.status, "error");
   assert.equal(report.stoppedAt, "converge");
   assert.equal(report.convergence?.error, "coding-tooling did not return valid JSON");
+  assert.deepEqual(report.repositoryAfter?.statusPorcelain, [" M src/partial.ts"]);
   assert.equal(report.validation, null);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 5);
 });
