@@ -59,6 +59,7 @@ export type ConvergenceReport = {
   operation: "converge";
   status: ResultStatus;
   repositoryBefore: RepositoryEvidence;
+  repositoryAfter: RepositoryEvidence | null;
   tooling: ToolingEvidence;
   convergence: LayerEvidence | null;
   validation: ValidationReport | null;
