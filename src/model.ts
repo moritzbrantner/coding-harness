@@ -39,16 +39,29 @@ export type RepositoryEvidence = {
   error?: string;
 };
 
+export type ToolingEvidence = {
+  command: string;
+  prefixArgs: string[];
+};
+
 export type ValidationReport = {
   schemaVersion: 1;
   operation: "validate";
   status: ResultStatus;
   repository: RepositoryEvidence;
-  tooling: {
-    command: string;
-    prefixArgs: string[];
-  };
+  tooling: ToolingEvidence;
   layers: LayerEvidence[];
+  stoppedAt: string | null;
+};
+
+export type ConvergenceReport = {
+  schemaVersion: 1;
+  operation: "converge";
+  status: ResultStatus;
+  repositoryBefore: RepositoryEvidence;
+  tooling: ToolingEvidence;
+  convergence: LayerEvidence | null;
+  validation: ValidationReport | null;
   stoppedAt: string | null;
 };
 
