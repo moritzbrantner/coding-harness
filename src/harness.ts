@@ -243,6 +243,7 @@ export function convergeRepository(
     operation: "converge",
     status: "passed",
     repositoryBefore,
+    repositoryAfter: null,
     tooling: { ...tooling },
     convergence: null,
     validation: null,
@@ -260,10 +261,18 @@ export function convergeRepository(
   const execution = runCommand(tooling.command, args, resolvedRoot);
   const convergence = layerEvidence("converge", command, execution);
   report.convergence = convergence;
+  const repositoryAfter = repositoryEvidence(resolvedRoot, runCommand);
+  report.repositoryAfter = repositoryAfter;
 
   if (convergence.status !== "passed") {
     report.status = convergence.status;
     report.stoppedAt = "converge";
+    return report;
+  }
+
+  if (repositoryAfter.error) {
+    report.status = "error";
+    report.stoppedAt = "repository-after";
     return report;
   }
 
