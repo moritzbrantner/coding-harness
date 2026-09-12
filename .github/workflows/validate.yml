@@ -34,5 +34,9 @@ jobs:
         run: |
           bun run format:write
           git diff --exit-code
-      - name: Check
-        run: bun run lint && bun run typecheck && bun run test
+      - name: Lint
+        run: bun run lint
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Test
+        run: bun run test

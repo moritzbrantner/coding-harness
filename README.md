@@ -13,10 +13,11 @@ Personal orchestration for taking a repository from inspection to deterministic 
 3. `coding-tooling conformance --json`;
 4. strict `fast` validation (static checks, unit tests, and build capabilities declared by the repository);
 5. strict `integration` validation;
-6. strict `e2e` validation;
-7. deterministic new-findings inspection.
+6. strict `workflow` validation for multi-operation/business-workflow integration;
+7. strict `e2e` validation;
+8. deterministic new-findings inspection.
 
-Each successful layer unlocks the next one. A failed, unavailable, malformed, or process-status-inconsistent result stops the run. Tiers with no applicable repository capability remain empty and pass according to `coding-tooling`; the harness does not invent substitute commands.
+Each successful layer unlocks the next one. A failed, unavailable, malformed, or process-status-inconsistent result stops the run. Tiers with no applicable repository capability remain empty and pass according to `coding-tooling`; the harness does not invent substitute commands. The harness keeps `workflow` separate from both endpoint/component integration and browser/full-system E2E so its orchestration matches the authoritative `coding-tooling` convergence sequence.
 
 The default report is written to `.artifacts/coding-harness/validation.json`. It records the repository HEAD, whether the worktree was clean, every invoked command, exit code, and parsed machine-readable output.
 
