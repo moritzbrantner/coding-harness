@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { layerEvidence, validateRepository, validationLayers } from "../src/harness.ts";
+import {
+  convergeRepository,
+  layerEvidence,
+  validateRepository,
+  validationLayers,
+} from "../src/harness.ts";
 import type { CommandExecution, CommandRunner, ResultStatus } from "../src/model.ts";
 
 const exitCodes: Record<ResultStatus, number> = {
@@ -32,6 +37,34 @@ function fakeRunner(statusByLayer: Partial<Record<string, ResultStatus>> = {}): 
     if (command === "git" && args[0] === "status") return { exitCode: 0, stdout: "", stderr: "" };
 
     const layer = validationLayers[toolingIndex++];
+    assert.ok(layer);
+    return execution(statusByLayer[layer.id] ?? "passed", layer.id);
+  };
+  return { run, calls };
+}
+
+function fakeConvergenceRunner(
+  convergeStatus: ResultStatus = "passed",
+  statusByLayer: Partial<Record<string, ResultStatus>> = {},
+): { run: CommandRunner; calls: string[][] } {
+  const calls: string[][] = [];
+  let gitStatusCount = 0;
+  let validationIndex = 0;
+  const run: CommandRunner = (command, args) => {
+    calls.push([command, ...args]);
+    if (command === "git" && args[0] === "rev-parse")
+      return { exitCode: 0, stdout: "0123456789abcdef\n", stderr: "" };
+    if (command === "git" && args[0] === "status") {
+      gitStatusCount += 1;
+      return {
+        exitCode: 0,
+        stdout: gitStatusCount === 1 ? "" : " M src/generated.ts\n",
+        stderr: "",
+      };
+    }
+    if (args[0] === "converge") return execution(convergeStatus, "converge");
+
+    const layer = validationLayers[validationIndex++];
     assert.ok(layer);
     return execution(statusByLayer[layer.id] ?? "passed", layer.id);
   };
@@ -177,4 +210,65 @@ test("reports missing coding-tooling as unavailable", () => {
     error: "ENOENT",
   });
   assert.equal(missing.status, "unavailable");
+});
+
+test("converges first and validates the resulting worktree", () => {
+  const { run, calls } = fakeConvergenceRunner();
+  const report = convergeRepository(
+    "/repo",
+    { command: "coding-tooling", prefixArgs: [] },
+    { runCommand: run },
+  );
+
+  assert.equal(report.status, "passed");
+  assert.equal(report.stoppedAt, null);
+  assert.equal(report.repositoryBefore.clean, true);
+  assert.deepEqual(report.convergence?.command, ["coding-tooling", "converge", "--json"]);
+  assert.equal(report.convergence?.status, "passed");
+  assert.equal(report.validation?.status, "passed");
+  assert.equal(report.validation?.repository.clean, false);
+  assert.deepEqual(report.validation?.repository.statusPorcelain, [" M src/generated.ts"]);
+  assert.deepEqual(
+    report.validation?.layers.map((layer) => layer.id),
+    validationLayers.map((layer) => layer.id),
+  );
+  assert.equal(calls.length, validationLayers.length + 5);
+});
+
+test("does not validate after a failed convergence operation", () => {
+  const { run, calls } = fakeConvergenceRunner("failed");
+  const report = convergeRepository(
+    "/repo",
+    { command: "coding-tooling", prefixArgs: [] },
+    { runCommand: run },
+  );
+
+  assert.equal(report.status, "failed");
+  assert.equal(report.stoppedAt, "converge");
+  assert.equal(report.convergence?.status, "failed");
+  assert.equal(report.validation, null);
+  assert.equal(calls.length, 3);
+});
+
+test("does not validate malformed convergence evidence", () => {
+  const calls: string[][] = [];
+  const run: CommandRunner = (command, args) => {
+    calls.push([command, ...args]);
+    if (command === "git" && args[0] === "rev-parse")
+      return { exitCode: 0, stdout: "0123456789abcdef\n", stderr: "" };
+    if (command === "git" && args[0] === "status") return { exitCode: 0, stdout: "", stderr: "" };
+    return { exitCode: 0, stdout: "not json", stderr: "" };
+  };
+
+  const report = convergeRepository(
+    "/repo",
+    { command: "coding-tooling", prefixArgs: [] },
+    { runCommand: run },
+  );
+
+  assert.equal(report.status, "error");
+  assert.equal(report.stoppedAt, "converge");
+  assert.equal(report.convergence?.error, "coding-tooling did not return valid JSON");
+  assert.equal(report.validation, null);
+  assert.equal(calls.length, 3);
 });
