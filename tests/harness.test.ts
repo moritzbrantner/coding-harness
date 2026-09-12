@@ -58,6 +58,10 @@ test("runs the validation layers in deterministic order", () => {
     ],
   );
   assert.deepEqual(
+    validationLayers.map((layer) => layer.id),
+    ["discovery", "conformance", "fast", "integration", "workflow", "e2e", "findings"],
+  );
+  assert.deepEqual(
     report.layers.map((layer) => layer.id),
     validationLayers.map((layer) => layer.id),
   );
@@ -78,6 +82,30 @@ test("fails closed and stops after the first non-passing layer", () => {
     report.layers.map((layer) => layer.id),
     ["discovery", "conformance", "fast", "integration"],
   );
+});
+
+test("runs workflow validation after integration and before e2e", () => {
+  const { run, calls } = fakeRunner({ workflow: "failed" });
+  const report = validateRepository(
+    "/repo",
+    { command: "coding-tooling", prefixArgs: [] },
+    { runCommand: run },
+  );
+
+  assert.equal(report.status, "failed");
+  assert.equal(report.stoppedAt, "workflow");
+  assert.deepEqual(
+    report.layers.map((layer) => layer.id),
+    ["discovery", "conformance", "fast", "integration", "workflow"],
+  );
+  assert.deepEqual(calls.at(-1), [
+    "coding-tooling",
+    "run",
+    "--tier",
+    "workflow",
+    "--strict",
+    "--json",
+  ]);
 });
 
 test("records a dirty worktree without pretending it is an exact clean-head run", () => {
