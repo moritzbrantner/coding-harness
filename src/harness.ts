@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import type {
   CommandExecution,
   CommandRunner,
+  ConvergenceReport,
   LayerEvidence,
   ProcessEvidence,
   RepositoryEvidence,
@@ -226,5 +227,50 @@ export function validateRepository(
     }
   }
 
+  return report;
+}
+
+export function convergeRepository(
+  root: string,
+  tooling: ToolingInvocation,
+  dependencies: HarnessDependencies = {},
+): ConvergenceReport {
+  const runCommand = dependencies.runCommand ?? defaultRunCommand;
+  const resolvedRoot = resolve(root);
+  const repositoryBefore = repositoryEvidence(resolvedRoot, runCommand);
+  const report: ConvergenceReport = {
+    schemaVersion: 1,
+    operation: "converge",
+    status: "passed",
+    repositoryBefore,
+    tooling: { ...tooling },
+    convergence: null,
+    validation: null,
+    stoppedAt: null,
+  };
+
+  if (repositoryBefore.error) {
+    report.status = "error";
+    report.stoppedAt = "repository-before";
+    return report;
+  }
+
+  const args = [...tooling.prefixArgs, "converge", "--json"];
+  const command = [tooling.command, ...args];
+  const execution = runCommand(tooling.command, args, resolvedRoot);
+  const convergence = layerEvidence("converge", command, execution);
+  report.convergence = convergence;
+
+  if (convergence.status !== "passed") {
+    report.status = convergence.status;
+    report.stoppedAt = "converge";
+    return report;
+  }
+
+  const validation = validateRepository(resolvedRoot, tooling, { runCommand });
+  report.validation = validation;
+  report.status = validation.status;
+  if (validation.status !== "passed")
+    report.stoppedAt = `validation:${validation.stoppedAt ?? "unknown"}`;
   return report;
 }
