@@ -27,6 +27,10 @@ export const validationLayers = [
     id: "integration",
     args: ["run", "--tier", "integration", "--strict", "--json"],
   },
+  {
+    id: "workflow",
+    args: ["run", "--tier", "workflow", "--strict", "--json"],
+  },
   { id: "e2e", args: ["run", "--tier", "e2e", "--strict", "--json"] },
   { id: "findings", args: ["findings", "--new", "--json"] },
 ] as const;
