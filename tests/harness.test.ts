@@ -274,6 +274,30 @@ test("tracks repository changes without attributing pre-existing dirt to converg
   assert.deepEqual(delta.changedPaths, ["src/generated.ts"]);
 });
 
+test("does not invent a worktree delta when post-convergence evidence is unavailable", () => {
+  const before: RepositoryEvidence = {
+    root: "/repo",
+    head: "abc",
+    clean: false,
+    statusPorcelain: [" M src/existing.ts"],
+    executions: [],
+  };
+  const after: RepositoryEvidence = {
+    root: "/repo",
+    head: "abc",
+    clean: null,
+    statusPorcelain: [],
+    executions: [],
+    error: "Could not inspect repository worktree",
+  };
+
+  assert.deepEqual(repositoryDelta(before, after), {
+    headChanged: false,
+    worktreeChanged: null,
+    changedPaths: [],
+  });
+});
+
 test("converges without duplicate tooling verification and validates the resulting worktree", () => {
   const { run, calls } = fakeConvergenceRunner();
   const report = convergeRepository(
