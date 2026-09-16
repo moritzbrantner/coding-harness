@@ -11,6 +11,7 @@ import type {
   ResultStatus,
   ToolEnvelope,
   ValidationReport,
+  WorktreePathEvidence,
 } from "./model.ts";
 import { runCommand as defaultRunCommand } from "./process.ts";
 
@@ -20,6 +21,8 @@ const expectedExitCodes: Record<ResultStatus, number> = {
   unavailable: 2,
   error: 3,
 };
+
+const worktreeHashBatchSize = 128;
 
 export const validationLayers = [
   { id: "discovery", args: ["inspect", "--json"] },
@@ -44,6 +47,12 @@ export type ToolingInvocation = {
 
 export type HarnessDependencies = {
   runCommand?: CommandRunner;
+};
+
+type ParsedWorktree = {
+  statusPorcelain: string[];
+  worktree: WorktreePathEvidence[];
+  error?: string;
 };
 
 function isResultStatus(value: unknown): value is ResultStatus {
@@ -178,6 +187,90 @@ function processEvidence(
   };
 }
 
+function parseStatusPorcelain(output: string): ParsedWorktree {
+  const records = output.split("\0");
+  const statusPorcelain: string[] = [];
+  const worktree: WorktreePathEvidence[] = [];
+
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (!record) continue;
+    if (record.length < 4 || record[2] !== " ") {
+      return { statusPorcelain, worktree, error: "Git returned malformed porcelain status" };
+    }
+
+    const status = record.slice(0, 2);
+    const path = record.slice(3);
+    if (!path) {
+      return { statusPorcelain, worktree, error: "Git returned an empty worktree path" };
+    }
+
+    let previousPath: string | undefined;
+    if (status.includes("R") || status.includes("C")) {
+      previousPath = records[index + 1] || undefined;
+      if (!previousPath) {
+        return { statusPorcelain, worktree, error: "Git returned an incomplete rename status" };
+      }
+      index += 1;
+    }
+
+    worktree.push({ status, path, previousPath, contentIdentity: null });
+    statusPorcelain.push(
+      previousPath ? `${status} ${previousPath} -> ${path}` : `${status} ${path}`,
+    );
+  }
+
+  return { statusPorcelain, worktree };
+}
+
+function fingerprintWorktree(
+  root: string,
+  worktree: WorktreePathEvidence[],
+  runCommand: CommandRunner,
+  executions: ProcessEvidence[],
+): { worktree: WorktreePathEvidence[]; error?: string } {
+  const paths = [
+    ...new Set(
+      worktree
+        .filter((entry) => !entry.status.includes("D"))
+        .map((entry) => entry.path),
+    ),
+  ].sort();
+  if (paths.length === 0) return { worktree };
+
+  const identities = new Map<string, string>();
+  for (let start = 0; start < paths.length; start += worktreeHashBatchSize) {
+    const batch = paths.slice(start, start + worktreeHashBatchSize);
+    const hashArgs = ["hash-object", "--no-filters", "--", ...batch];
+    const hash = runCommand("git", hashArgs, root);
+    executions.push(processEvidence("git", hashArgs, hash));
+    if (hash.error || hash.exitCode !== 0) {
+      return {
+        worktree,
+        error: hash.error ?? (hash.stderr.trim() || "Could not fingerprint dirty worktree paths"),
+      };
+    }
+
+    const hashes = hash.stdout.split(/\r?\n/).filter(Boolean);
+    if (hashes.length !== batch.length) {
+      return {
+        worktree,
+        error: "Git returned an unexpected number of worktree content identities",
+      };
+    }
+    for (let index = 0; index < batch.length; index += 1) {
+      identities.set(batch[index]!, `blob:${hashes[index]}`);
+    }
+  }
+
+  return {
+    worktree: worktree.map((entry) => ({
+      ...entry,
+      contentIdentity: identities.get(entry.path) ?? null,
+    })),
+  };
+}
+
 export function repositoryEvidence(root: string, runCommand: CommandRunner): RepositoryEvidence {
   const executions: ProcessEvidence[] = [];
   const headArgs = ["rev-parse", "HEAD"];
@@ -189,12 +282,13 @@ export function repositoryEvidence(root: string, runCommand: CommandRunner): Rep
       head: null,
       clean: null,
       statusPorcelain: [],
+      worktree: [],
       executions,
       error: head.error ?? (head.stderr.trim() || "Could not resolve repository HEAD"),
     };
   }
 
-  const statusArgs = ["status", "--porcelain=v1"];
+  const statusArgs = ["status", "--porcelain=v1", "-z", "--untracked-files=all"];
   const status = runCommand("git", statusArgs, root);
   executions.push(processEvidence("git", statusArgs, status));
   if (status.error || status.exitCode !== 0) {
@@ -203,23 +297,60 @@ export function repositoryEvidence(root: string, runCommand: CommandRunner): Rep
       head: head.stdout.trim(),
       clean: null,
       statusPorcelain: [],
+      worktree: [],
       executions,
       error: status.error ?? (status.stderr.trim() || "Could not inspect repository worktree"),
     };
   }
 
-  const statusPorcelain = status.stdout.split(/\r?\n/).filter(Boolean);
+  const parsed = parseStatusPorcelain(status.stdout);
+  if (parsed.error) {
+    return {
+      root,
+      head: head.stdout.trim(),
+      clean: null,
+      statusPorcelain: parsed.statusPorcelain,
+      worktree: parsed.worktree,
+      executions,
+      error: parsed.error,
+    };
+  }
+
+  const fingerprinted = fingerprintWorktree(root, parsed.worktree, runCommand, executions);
+  if (fingerprinted.error) {
+    return {
+      root,
+      head: head.stdout.trim(),
+      clean: parsed.worktree.length === 0,
+      statusPorcelain: parsed.statusPorcelain,
+      worktree: fingerprinted.worktree,
+      executions,
+      error: fingerprinted.error,
+    };
+  }
+
   return {
     root,
     head: head.stdout.trim(),
-    clean: statusPorcelain.length === 0,
-    statusPorcelain,
+    clean: parsed.worktree.length === 0,
+    statusPorcelain: parsed.statusPorcelain,
+    worktree: fingerprinted.worktree,
     executions,
   };
 }
 
-function worktreeStateByPath(statusPorcelain: string[]): Map<string, string> {
-  return new Map(statusPorcelain.map((entry) => [entry.slice(3), entry.slice(0, 2)]));
+function worktreeStateByPath(repository: RepositoryEvidence): Map<string, string> {
+  const state = new Map<string, string>();
+  for (const entry of repository.worktree) {
+    state.set(
+      entry.path,
+      JSON.stringify([entry.status, entry.previousPath ?? null, entry.contentIdentity]),
+    );
+    if (entry.previousPath) {
+      state.set(entry.previousPath, JSON.stringify(["rename-source", entry.path]));
+    }
+  }
+  return state;
 }
 
 export function repositoryDelta(
@@ -232,8 +363,8 @@ export function repositoryDelta(
     return { headChanged, worktreeChanged: null, changedPaths: [] };
   }
 
-  const beforeState = worktreeStateByPath(before.statusPorcelain);
-  const afterState = worktreeStateByPath(after.statusPorcelain);
+  const beforeState = worktreeStateByPath(before);
+  const afterState = worktreeStateByPath(after);
   const paths = new Set([...beforeState.keys(), ...afterState.keys()]);
   const changedPaths = [...paths]
     .filter((path) => beforeState.get(path) !== afterState.get(path))
