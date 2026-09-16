@@ -241,20 +241,17 @@ test("reports missing coding-tooling as unavailable", () => {
 });
 
 test("rejects malformed convergence result states", () => {
-  const evidence = convergenceEvidence(
-    ["coding-tooling", "converge", "--no-verify", "--json"],
-    {
-      exitCode: 0,
-      stdout: JSON.stringify({
-        schemaVersion: 1,
-        operation: "converge",
-        status: "passed",
-        data: { result: "unknown" },
-        diagnostics: [],
-      }),
-      stderr: "",
-    },
-  );
+  const evidence = convergenceEvidence(["coding-tooling", "converge", "--no-verify", "--json"], {
+    exitCode: 0,
+    stdout: JSON.stringify({
+      schemaVersion: 1,
+      operation: "converge",
+      status: "passed",
+      data: { result: "unknown" },
+      diagnostics: [],
+    }),
+    stderr: "",
+  });
 
   assert.equal(evidence.status, "error");
   assert.equal(evidence.error, "coding-tooling convergence result had an unknown result state");
