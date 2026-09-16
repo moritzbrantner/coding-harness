@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { parseCli } from "../src/cli.ts";
 import {
   convergeRepository,
+  convergenceEvidence,
   layerEvidence,
+  repositoryDelta,
   validateRepository,
   validationLayers,
 } from "../src/harness.ts";
-import type { CommandExecution, CommandRunner, ResultStatus } from "../src/model.ts";
+import type {
+  CommandExecution,
+  CommandRunner,
+  RepositoryEvidence,
+  ResultStatus,
+} from "../src/model.ts";
 
 const exitCodes: Record<ResultStatus, number> = {
   passed: 0,
@@ -20,6 +28,23 @@ function execution(status: ResultStatus, operation = "test"): CommandExecution {
   return {
     exitCode: exitCodes[status],
     stdout: JSON.stringify({ schemaVersion: 1, operation, status, data: {}, diagnostics: [] }),
+    stderr: "",
+  };
+}
+
+function convergenceExecution(
+  status: ResultStatus = "passed",
+  result: "converged" | "partial" | "blocked" = status === "passed" ? "converged" : "blocked",
+): CommandExecution {
+  return {
+    exitCode: exitCodes[status],
+    stdout: JSON.stringify({
+      schemaVersion: 1,
+      operation: "converge",
+      status,
+      data: { result },
+      diagnostics: [],
+    }),
     stderr: "",
   };
 }
@@ -58,11 +83,14 @@ function fakeConvergenceRunner(
       gitStatusCount += 1;
       return {
         exitCode: 0,
-        stdout: gitStatusCount === 1 ? "" : " M src/generated.ts\n",
+        stdout:
+          gitStatusCount === 1
+            ? " M src/existing.ts\n"
+            : " M src/existing.ts\n M src/generated.ts\n",
         stderr: "",
       };
     }
-    if (args[0] === "converge") return execution(convergeStatus, "converge");
+    if (args.includes("converge")) return convergenceExecution(convergeStatus);
 
     const layer = validationLayers[validationIndex++];
     assert.ok(layer);
@@ -212,7 +240,44 @@ test("reports missing coding-tooling as unavailable", () => {
   assert.equal(missing.status, "unavailable");
 });
 
-test("converges first and validates the resulting worktree", () => {
+test("rejects malformed convergence result states", () => {
+  const evidence = convergenceEvidence(
+    ["coding-tooling", "converge", "--no-verify", "--json"],
+    {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        schemaVersion: 1,
+        operation: "converge",
+        status: "passed",
+        data: { result: "unknown" },
+        diagnostics: [],
+      }),
+      stderr: "",
+    },
+  );
+
+  assert.equal(evidence.status, "error");
+  assert.equal(evidence.error, "coding-tooling convergence result had an unknown result state");
+});
+
+test("tracks repository changes without attributing pre-existing dirt to convergence", () => {
+  const base = {
+    root: "/repo",
+    head: "abc",
+    clean: false,
+    executions: [],
+  } satisfies Omit<RepositoryEvidence, "statusPorcelain">;
+  const delta = repositoryDelta(
+    { ...base, statusPorcelain: [" M src/existing.ts"] },
+    { ...base, statusPorcelain: [" M src/existing.ts", "?? src/generated.ts"] },
+  );
+
+  assert.equal(delta.headChanged, false);
+  assert.equal(delta.worktreeChanged, true);
+  assert.deepEqual(delta.changedPaths, ["src/generated.ts"]);
+});
+
+test("converges without duplicate tooling verification and validates the resulting worktree", () => {
   const { run, calls } = fakeConvergenceRunner();
   const report = convergeRepository(
     "/repo",
@@ -222,22 +287,34 @@ test("converges first and validates the resulting worktree", () => {
 
   assert.equal(report.status, "passed");
   assert.equal(report.stoppedAt, null);
-  assert.equal(report.repositoryBefore.clean, true);
-  assert.deepEqual(report.convergence?.command, ["coding-tooling", "converge", "--json"]);
+  assert.equal(report.repositoryBefore.clean, false);
+  assert.deepEqual(report.convergence?.command, [
+    "coding-tooling",
+    "converge",
+    "--no-verify",
+    "--json",
+  ]);
   assert.equal(report.convergence?.status, "passed");
   assert.equal(report.repositoryAfter?.clean, false);
-  assert.deepEqual(report.repositoryAfter?.statusPorcelain, [" M src/generated.ts"]);
+  assert.deepEqual(report.repositoryAfter?.statusPorcelain, [
+    " M src/existing.ts",
+    " M src/generated.ts",
+  ]);
+  assert.deepEqual(report.repositoryDelta, {
+    headChanged: false,
+    worktreeChanged: true,
+    changedPaths: ["src/generated.ts"],
+  });
   assert.equal(report.validation?.status, "passed");
-  assert.equal(report.validation?.repository.clean, false);
-  assert.deepEqual(report.validation?.repository.statusPorcelain, [" M src/generated.ts"]);
+  assert.equal(report.repositoryAfter, report.validation?.repository);
   assert.deepEqual(
     report.validation?.layers.map((layer) => layer.id),
     validationLayers.map((layer) => layer.id),
   );
-  assert.equal(calls.length, validationLayers.length + 7);
+  assert.equal(calls.length, validationLayers.length + 5);
 });
 
-test("does not validate after a failed convergence operation", () => {
+test("does not validate after a blocked convergence operation", () => {
   const { run, calls } = fakeConvergenceRunner("failed");
   const report = convergeRepository(
     "/repo",
@@ -248,7 +325,7 @@ test("does not validate after a failed convergence operation", () => {
   assert.equal(report.status, "failed");
   assert.equal(report.stoppedAt, "converge");
   assert.equal(report.convergence?.status, "failed");
-  assert.equal(report.repositoryAfter?.clean, false);
+  assert.deepEqual(report.repositoryDelta?.changedPaths, ["src/generated.ts"]);
   assert.equal(report.validation, null);
   assert.equal(calls.length, 5);
 });
@@ -281,6 +358,13 @@ test("does not validate malformed convergence evidence", () => {
   assert.equal(report.stoppedAt, "converge");
   assert.equal(report.convergence?.error, "coding-tooling did not return valid JSON");
   assert.deepEqual(report.repositoryAfter?.statusPorcelain, [" M src/partial.ts"]);
+  assert.deepEqual(report.repositoryDelta?.changedPaths, ["src/partial.ts"]);
   assert.equal(report.validation, null);
   assert.equal(calls.length, 5);
+});
+
+test("uses a dedicated convergence report path by default", () => {
+  const options = parseCli(["converge", "--root", "."]);
+  assert.equal(options.command, "converge");
+  assert.equal(options.report, ".artifacts/coding-harness/convergence.json");
 });
