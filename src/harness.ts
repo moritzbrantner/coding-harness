@@ -6,6 +6,7 @@ import type {
   ConvergenceReport,
   LayerEvidence,
   ProcessEvidence,
+  RepositoryDelta,
   RepositoryEvidence,
   ResultStatus,
   ToolEnvelope,
@@ -51,6 +52,14 @@ function isResultStatus(value: unknown): value is ResultStatus {
 
 function isToolEnvelope(value: unknown): value is ToolEnvelope {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function invalidLayer(evidence: LayerEvidence, error: string): LayerEvidence {
+  return {
+    ...evidence,
+    status: "error",
+    error,
+  };
 }
 
 function unavailableLayer(
@@ -135,6 +144,26 @@ export function layerEvidence(
   };
 }
 
+export function convergenceEvidence(command: string[], execution: CommandExecution): LayerEvidence {
+  const evidence = layerEvidence("converge", command, execution);
+  if (!evidence.output) return evidence;
+  if (evidence.output.operation !== "converge")
+    return invalidLayer(evidence, "coding-tooling returned a non-convergence result");
+
+  const data = evidence.output.data;
+  if (typeof data !== "object" || data === null || Array.isArray(data))
+    return invalidLayer(evidence, "coding-tooling convergence result did not contain object data");
+
+  const result = (data as Record<string, unknown>).result;
+  if (result !== "converged" && result !== "partial" && result !== "blocked")
+    return invalidLayer(evidence, "coding-tooling convergence result had an unknown result state");
+
+  if ((evidence.status === "passed") === (result === "blocked"))
+    return invalidLayer(evidence, "coding-tooling convergence result disagreed with its status");
+
+  return evidence;
+}
+
 function processEvidence(
   command: string,
   args: string[],
@@ -186,6 +215,28 @@ export function repositoryEvidence(root: string, runCommand: CommandRunner): Rep
     clean: statusPorcelain.length === 0,
     statusPorcelain,
     executions,
+  };
+}
+
+function worktreeStateByPath(statusPorcelain: string[]): Map<string, string> {
+  return new Map(statusPorcelain.map((entry) => [entry.slice(3), entry.slice(0, 2)]));
+}
+
+export function repositoryDelta(
+  before: RepositoryEvidence,
+  after: RepositoryEvidence,
+): RepositoryDelta {
+  const beforeState = worktreeStateByPath(before.statusPorcelain);
+  const afterState = worktreeStateByPath(after.statusPorcelain);
+  const paths = new Set([...beforeState.keys(), ...afterState.keys()]);
+  const changedPaths = [...paths]
+    .filter((path) => beforeState.get(path) !== afterState.get(path))
+    .sort();
+
+  return {
+    headChanged: before.head === null || after.head === null ? null : before.head !== after.head,
+    worktreeChanged: before.error || after.error ? null : changedPaths.length > 0,
+    changedPaths,
   };
 }
 
@@ -244,6 +295,7 @@ export function convergeRepository(
     status: "passed",
     repositoryBefore,
     repositoryAfter: null,
+    repositoryDelta: null,
     tooling: { ...tooling },
     convergence: null,
     validation: null,
@@ -256,28 +308,25 @@ export function convergeRepository(
     return report;
   }
 
-  const args = [...tooling.prefixArgs, "converge", "--json"];
+  const args = [...tooling.prefixArgs, "converge", "--no-verify", "--json"];
   const command = [tooling.command, ...args];
   const execution = runCommand(tooling.command, args, resolvedRoot);
-  const convergence = layerEvidence("converge", command, execution);
+  const convergence = convergenceEvidence(command, execution);
   report.convergence = convergence;
-  const repositoryAfter = repositoryEvidence(resolvedRoot, runCommand);
-  report.repositoryAfter = repositoryAfter;
 
   if (convergence.status !== "passed") {
+    const repositoryAfter = repositoryEvidence(resolvedRoot, runCommand);
+    report.repositoryAfter = repositoryAfter;
+    report.repositoryDelta = repositoryDelta(repositoryBefore, repositoryAfter);
     report.status = convergence.status;
     report.stoppedAt = "converge";
     return report;
   }
 
-  if (repositoryAfter.error) {
-    report.status = "error";
-    report.stoppedAt = "repository-after";
-    return report;
-  }
-
   const validation = validateRepository(resolvedRoot, tooling, { runCommand });
   report.validation = validation;
+  report.repositoryAfter = validation.repository;
+  report.repositoryDelta = repositoryDelta(repositoryBefore, validation.repository);
   report.status = validation.status;
   if (validation.status !== "passed")
     report.stoppedAt = `validation:${validation.stoppedAt ?? "unknown"}`;
