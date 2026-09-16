@@ -59,6 +59,10 @@ function regularStageOutput(args: string[]): string {
     .join("");
 }
 
+function isSubmoduleCwd(cwd: string): boolean {
+  return cwd.endsWith("libs/sub") || cwd.endsWith("libs\\sub");
+}
+
 function fakeRunner(statusByLayer: Partial<Record<string, ResultStatus>> = {}): {
   run: CommandRunner;
   calls: string[][];
@@ -267,11 +271,9 @@ test("records and fingerprints a dirty worktree without pretending it is clean",
 
 test("fingerprints dirty submodules without hashing their directories", () => {
   const calls: Array<{ args: string[]; cwd: string }> = [];
-  const isSubmodule = (cwd: string): boolean =>
-    cwd.endsWith("libs/sub") || cwd.endsWith("libs\\sub");
   const run: CommandRunner = (command, args, cwd) => {
     calls.push({ args: [command, ...args], cwd });
-    const nested = isSubmodule(cwd);
+    const nested = isSubmoduleCwd(cwd);
     if (command === "git" && args[0] === "rev-parse")
       return { exitCode: 0, stdout: nested ? "submodule-head\n" : "root-head\n", stderr: "" };
     if (command === "git" && args[0] === "status")
@@ -302,13 +304,15 @@ test("fingerprints dirty submodules without hashing their directories", () => {
   assert.equal(
     calls.some(
       (call) =>
-        !isSubmodule(call.cwd) && call.args[1] === "hash-object" && call.args.includes("libs/sub"),
+        !isSubmoduleCwd(call.cwd) &&
+        call.args[1] === "hash-object" &&
+        call.args.includes("libs/sub"),
     ),
     false,
   );
   assert.equal(
     repository.executions.some(
-      (item) => isSubmodule(item.cwd ?? "") && item.command[1] === "hash-object",
+      (item) => isSubmoduleCwd(item.cwd ?? "") && item.command[1] === "hash-object",
     ),
     true,
   );
