@@ -230,11 +230,7 @@ function fingerprintWorktree(
   executions: ProcessEvidence[],
 ): { worktree: WorktreePathEvidence[]; error?: string } {
   const paths = [
-    ...new Set(
-      worktree
-        .filter((entry) => !entry.status.includes("D"))
-        .map((entry) => entry.path),
-    ),
+    ...new Set(worktree.filter((entry) => !entry.status.includes("D")).map((entry) => entry.path)),
   ].sort();
   if (paths.length === 0) return { worktree };
 
