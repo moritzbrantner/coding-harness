@@ -55,6 +55,21 @@ type ParsedWorktree = {
   error?: string;
 };
 
+function sortedStrings(values: Iterable<string>): string[] {
+  const sorted: string[] = [];
+  for (const value of values) {
+    let low = 0;
+    let high = sorted.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (sorted[middle]! < value) low = middle + 1;
+      else high = middle;
+    }
+    sorted.splice(low, 0, value);
+  }
+  return sorted;
+}
+
 function isResultStatus(value: unknown): value is ResultStatus {
   return value === "passed" || value === "failed" || value === "unavailable" || value === "error";
 }
@@ -233,9 +248,9 @@ function fingerprintWorktree(
   runCommand: CommandRunner,
   executions: ProcessEvidence[],
 ): { worktree: WorktreePathEvidence[]; error?: string } {
-  const paths = [
-    ...new Set(worktree.filter((entry) => !entry.status.includes("D")).map((entry) => entry.path)),
-  ].toSorted();
+  const paths = sortedStrings(
+    new Set(worktree.filter((entry) => !entry.status.includes("D")).map((entry) => entry.path)),
+  );
   if (paths.length === 0) return { worktree };
 
   const identities = new Map<string, string>();
@@ -366,9 +381,9 @@ export function repositoryDelta(
   const beforeState = worktreeStateByPath(before);
   const afterState = worktreeStateByPath(after);
   const paths = new Set([...beforeState.keys(), ...afterState.keys()]);
-  const changedPaths = [...paths]
-    .filter((path) => beforeState.get(path) !== afterState.get(path))
-    .toSorted();
+  const changedPaths = sortedStrings(
+    [...paths].filter((path) => beforeState.get(path) !== afterState.get(path)),
+  );
 
   return {
     headChanged,
