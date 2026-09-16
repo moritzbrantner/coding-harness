@@ -29,11 +29,12 @@ The default report is written to `.artifacts/coding-harness/validation.json`. It
 2. run `coding-tooling converge --no-verify --json`;
 3. stop immediately when deterministic convergence is blocked, unavailable, malformed, or process-status-inconsistent;
 4. otherwise run the normal harness validation sequence against the resulting worktree;
-5. write one report containing the convergence evidence, validation evidence, repository state before and after, and the paths whose worktree state changed.
+5. re-observe repository state after validation and fail closed if validation itself changed Git-visible state;
+6. write one report containing convergence evidence, validation evidence, repository state before and after, convergence deltas, and validation-mutation deltas.
 
 The harness deliberately passes `--no-verify` to `coding-tooling converge`. `coding-tooling` remains authoritative for deterministic scaffolding, normalization, fixed-point/cycle detection, and semantic handoff generation, while the harness remains authoritative for validation-layer promotion. This avoids running the same verification twice.
 
-A `partial` tooling convergence result is still a successful deterministic fixed point and is therefore followed by validation. A blocked or otherwise non-passing convergence result is not. Validation is read-only, so its repository snapshot is reused as the post-convergence snapshot instead of executing a redundant third Git inspection.
+A `partial` tooling convergence result is still a successful deterministic fixed point and is therefore followed by validation. A blocked or otherwise non-passing convergence result is not. The harness snapshots the repository both before and after validation instead of assuming repository-owned build or test commands are read-only. A changed HEAD or changed dirty-path status/content during validation invalidates the run. Dirty paths carry bounded content identities, so edits to files that were already dirty before convergence are still distinguished from unchanged pre-existing work without hashing the whole repository.
 
 The default convergence report is written to `.artifacts/coding-harness/convergence.json`.
 
