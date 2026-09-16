@@ -30,11 +30,19 @@ export type LayerEvidence = {
   error?: string;
 };
 
+export type WorktreePathEvidence = {
+  status: string;
+  path: string;
+  previousPath?: string;
+  contentIdentity: string | null;
+};
+
 export type RepositoryEvidence = {
   root: string;
   head: string | null;
   clean: boolean | null;
   statusPorcelain: string[];
+  worktree: WorktreePathEvidence[];
   executions: ProcessEvidence[];
   error?: string;
 };
