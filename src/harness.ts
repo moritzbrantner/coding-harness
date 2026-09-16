@@ -214,7 +214,11 @@ function parseStatusPorcelain(output: string): ParsedWorktree {
       index += 1;
     }
 
-    worktree.push({ status, path, previousPath, contentIdentity: null });
+    worktree.push(
+      previousPath
+        ? { status, path, previousPath, contentIdentity: null }
+        : { status, path, contentIdentity: null },
+    );
     statusPorcelain.push(
       previousPath ? `${status} ${previousPath} -> ${path}` : `${status} ${path}`,
     );
@@ -231,7 +235,7 @@ function fingerprintWorktree(
 ): { worktree: WorktreePathEvidence[]; error?: string } {
   const paths = [
     ...new Set(worktree.filter((entry) => !entry.status.includes("D")).map((entry) => entry.path)),
-  ].sort();
+  ].toSorted();
   if (paths.length === 0) return { worktree };
 
   const identities = new Map<string, string>();
@@ -364,7 +368,7 @@ export function repositoryDelta(
   const paths = new Set([...beforeState.keys(), ...afterState.keys()]);
   const changedPaths = [...paths]
     .filter((path) => beforeState.get(path) !== afterState.get(path))
-    .sort();
+    .toSorted();
 
   return {
     headChanged,
