@@ -15,6 +15,7 @@ import type {
   CommandRunner,
   RepositoryEvidence,
   ResultStatus,
+  WorktreePathEvidence,
 } from "../src/model.ts";
 
 const exitCodes: Record<ResultStatus, number> = {
@@ -85,8 +86,19 @@ function fakeConvergenceRunner(
         exitCode: 0,
         stdout:
           gitStatusCount === 1
-            ? " M src/existing.ts\n"
-            : " M src/existing.ts\n M src/generated.ts\n",
+            ? " M src/existing.ts\0"
+            : " M src/existing.ts\0 M src/generated.ts\0",
+        stderr: "",
+      };
+    }
+    if (command === "git" && args[0] === "hash-object") {
+      const separator = args.indexOf("--");
+      const paths = args.slice(separator + 1);
+      return {
+        exitCode: 0,
+        stdout: `${paths
+          .map((path) => (path === "src/existing.ts" ? "existing-hash" : "generated-hash"))
+          .join("\n")}\n`,
         stderr: "",
       };
     }
@@ -97,6 +109,17 @@ function fakeConvergenceRunner(
     return execution(statusByLayer[layer.id] ?? "passed", layer.id);
   };
   return { run, calls };
+}
+
+function repositoryWithWorktree(worktree: WorktreePathEvidence[]): RepositoryEvidence {
+  return {
+    root: "/repo",
+    head: "abc",
+    clean: worktree.length === 0,
+    statusPorcelain: worktree.map((entry) => `${entry.status} ${entry.path}`),
+    worktree,
+    executions: [],
+  };
 }
 
 test("runs the validation layers in deterministic order", () => {
@@ -111,11 +134,12 @@ test("runs the validation layers in deterministic order", () => {
   assert.equal(report.stoppedAt, null);
   assert.equal(report.repository.head, "0123456789abcdef");
   assert.equal(report.repository.clean, true);
+  assert.deepEqual(report.repository.worktree, []);
   assert.deepEqual(
     report.repository.executions.map((item) => item.command),
     [
       ["git", "rev-parse", "HEAD"],
-      ["git", "status", "--porcelain=v1"],
+      ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
     ],
   );
   assert.deepEqual(
@@ -169,13 +193,19 @@ test("runs workflow validation after integration and before e2e", () => {
   ]);
 });
 
-test("records a dirty worktree without pretending it is an exact clean-head run", () => {
+test("records and fingerprints a dirty worktree without pretending it is clean", () => {
   let toolingIndex = 0;
   const run: CommandRunner = (command, args) => {
     if (command === "git" && args[0] === "rev-parse")
       return { exitCode: 0, stdout: "abc\n", stderr: "" };
     if (command === "git" && args[0] === "status")
-      return { exitCode: 0, stdout: " M src/example.ts\n?? scratch.txt\n", stderr: "" };
+      return {
+        exitCode: 0,
+        stdout: " M src/example.ts\0?? scratch.txt\0",
+        stderr: "",
+      };
+    if (command === "git" && args[0] === "hash-object")
+      return { exitCode: 0, stdout: "example-hash\nscratch-hash\n", stderr: "" };
     const layer = validationLayers[toolingIndex++];
     assert.ok(layer);
     return execution("passed", layer.id);
@@ -189,6 +219,18 @@ test("records a dirty worktree without pretending it is an exact clean-head run"
   assert.equal(report.status, "passed");
   assert.equal(report.repository.clean, false);
   assert.deepEqual(report.repository.statusPorcelain, [" M src/example.ts", "?? scratch.txt"]);
+  assert.deepEqual(report.repository.worktree, [
+    {
+      status: " M",
+      path: "src/example.ts",
+      contentIdentity: "blob:example-hash",
+    },
+    {
+      status: "??",
+      path: "scratch.txt",
+      contentIdentity: "blob:scratch-hash",
+    },
+  ]);
 });
 
 test("rejects malformed, non-object, and exit-status-inconsistent tooling evidence", () => {
@@ -257,36 +299,47 @@ test("rejects malformed convergence result states", () => {
   assert.equal(evidence.error, "coding-tooling convergence result had an unknown result state");
 });
 
-test("tracks repository changes without attributing pre-existing dirt to convergence", () => {
-  const base = {
-    root: "/repo",
-    head: "abc",
-    clean: false,
-    executions: [],
-  } satisfies Omit<RepositoryEvidence, "statusPorcelain">;
-  const delta = repositoryDelta(
-    { ...base, statusPorcelain: [" M src/existing.ts"] },
-    { ...base, statusPorcelain: [" M src/existing.ts", "?? src/generated.ts"] },
-  );
+test("tracks repository changes without attributing unchanged pre-existing dirt", () => {
+  const before = repositoryWithWorktree([
+    { status: " M", path: "src/existing.ts", contentIdentity: "blob:existing" },
+  ]);
+  const after = repositoryWithWorktree([
+    { status: " M", path: "src/existing.ts", contentIdentity: "blob:existing" },
+    { status: " M", path: "src/generated.ts", contentIdentity: "blob:generated" },
+  ]);
 
-  assert.equal(delta.headChanged, false);
-  assert.equal(delta.worktreeChanged, true);
-  assert.deepEqual(delta.changedPaths, ["src/generated.ts"]);
+  assert.deepEqual(repositoryDelta(before, after), {
+    headChanged: false,
+    worktreeChanged: true,
+    changedPaths: ["src/generated.ts"],
+  });
+});
+
+test("detects content changes to paths that were already dirty", () => {
+  const before = repositoryWithWorktree([
+    { status: " M", path: "src/existing.ts", contentIdentity: "blob:before" },
+  ]);
+  const after = repositoryWithWorktree([
+    { status: " M", path: "src/existing.ts", contentIdentity: "blob:after" },
+  ]);
+
+  assert.deepEqual(repositoryDelta(before, after), {
+    headChanged: false,
+    worktreeChanged: true,
+    changedPaths: ["src/existing.ts"],
+  });
 });
 
 test("does not invent a worktree delta when post-convergence evidence is unavailable", () => {
-  const before: RepositoryEvidence = {
-    root: "/repo",
-    head: "abc",
-    clean: false,
-    statusPorcelain: [" M src/existing.ts"],
-    executions: [],
-  };
+  const before = repositoryWithWorktree([
+    { status: " M", path: "src/existing.ts", contentIdentity: "blob:existing" },
+  ]);
   const after: RepositoryEvidence = {
     root: "/repo",
     head: "abc",
     clean: null,
     statusPorcelain: [],
+    worktree: [],
     executions: [],
     error: "Could not inspect repository worktree",
   };
@@ -332,7 +385,7 @@ test("converges without duplicate tooling verification and validates the resulti
     report.validation?.layers.map((layer) => layer.id),
     validationLayers.map((layer) => layer.id),
   );
-  assert.equal(calls.length, validationLayers.length + 5);
+  assert.equal(calls.length, validationLayers.length + 7);
 });
 
 test("does not validate after a blocked convergence operation", () => {
@@ -348,7 +401,7 @@ test("does not validate after a blocked convergence operation", () => {
   assert.equal(report.convergence?.status, "failed");
   assert.deepEqual(report.repositoryDelta?.changedPaths, ["src/generated.ts"]);
   assert.equal(report.validation, null);
-  assert.equal(calls.length, 5);
+  assert.equal(calls.length, 7);
 });
 
 test("does not validate malformed convergence evidence", () => {
@@ -362,10 +415,12 @@ test("does not validate malformed convergence evidence", () => {
       gitStatusCount += 1;
       return {
         exitCode: 0,
-        stdout: gitStatusCount === 1 ? "" : " M src/partial.ts\n",
+        stdout: gitStatusCount === 1 ? "" : " M src/partial.ts\0",
         stderr: "",
       };
     }
+    if (command === "git" && args[0] === "hash-object")
+      return { exitCode: 0, stdout: "partial-hash\n", stderr: "" };
     return { exitCode: 0, stdout: "not json", stderr: "" };
   };
 
@@ -381,7 +436,7 @@ test("does not validate malformed convergence evidence", () => {
   assert.deepEqual(report.repositoryAfter?.statusPorcelain, [" M src/partial.ts"]);
   assert.deepEqual(report.repositoryDelta?.changedPaths, ["src/partial.ts"]);
   assert.equal(report.validation, null);
-  assert.equal(calls.length, 5);
+  assert.equal(calls.length, 6);
 });
 
 test("uses a dedicated convergence report path by default", () => {
