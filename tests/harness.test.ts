@@ -204,8 +204,17 @@ test("records and fingerprints a dirty worktree without pretending it is clean",
         stdout: " M src/example.ts\0?? scratch.txt\0",
         stderr: "",
       };
-    if (command === "git" && args[0] === "hash-object")
-      return { exitCode: 0, stdout: "example-hash\nscratch-hash\n", stderr: "" };
+    if (command === "git" && args[0] === "hash-object") {
+      const separator = args.indexOf("--");
+      const paths = args.slice(separator + 1);
+      return {
+        exitCode: 0,
+        stdout: `${paths
+          .map((path) => (path === "src/example.ts" ? "example-hash" : "scratch-hash"))
+          .join("\n")}\n`,
+        stderr: "",
+      };
+    }
     const layer = validationLayers[toolingIndex++];
     assert.ok(layer);
     return execution("passed", layer.id);
