@@ -7,6 +7,7 @@ import {
   convergenceEvidence,
   layerEvidence,
   repositoryDelta,
+  repositoryEvidence,
   validateRepository,
   validationLayers,
 } from "../src/harness.ts";
@@ -48,6 +49,14 @@ function convergenceExecution(
     }),
     stderr: "",
   };
+}
+
+function regularStageOutput(args: string[]): string {
+  const separator = args.indexOf("--");
+  return args
+    .slice(separator + 1)
+    .map((path) => `100644 tracked-object 0\t${path}\0`)
+    .join("");
 }
 
 function fakeRunner(statusByLayer: Partial<Record<string, ResultStatus>> = {}): {
@@ -95,6 +104,8 @@ function fakeConvergenceRunner(
         stderr: "",
       };
     }
+    if (command === "git" && args[0] === "ls-files")
+      return { exitCode: 0, stdout: regularStageOutput(args), stderr: "" };
     if (command === "git" && args[0] === "hash-object") {
       const separator = args.indexOf("--");
       const paths = args.slice(separator + 1);
@@ -214,6 +225,8 @@ test("records and fingerprints a dirty worktree without pretending it is clean",
         stdout: " M src/example.ts\0?? scratch.txt\0",
         stderr: "",
       };
+    if (command === "git" && args[0] === "ls-files")
+      return { exitCode: 0, stdout: regularStageOutput(args), stderr: "" };
     if (command === "git" && args[0] === "hash-object") {
       const separator = args.indexOf("--");
       const paths = args.slice(separator + 1);
@@ -250,6 +263,57 @@ test("records and fingerprints a dirty worktree without pretending it is clean",
       contentIdentity: "blob:scratch-hash",
     },
   ]);
+});
+
+test("fingerprints dirty submodules without hashing their directories", () => {
+  const calls: Array<{ args: string[]; cwd: string }> = [];
+  const isSubmodule = (cwd: string): boolean =>
+    cwd.endsWith("libs/sub") || cwd.endsWith("libs\\sub");
+  const run: CommandRunner = (command, args, cwd) => {
+    calls.push({ args: [command, ...args], cwd });
+    const nested = isSubmodule(cwd);
+    if (command === "git" && args[0] === "rev-parse")
+      return { exitCode: 0, stdout: nested ? "submodule-head\n" : "root-head\n", stderr: "" };
+    if (command === "git" && args[0] === "status")
+      return {
+        exitCode: 0,
+        stdout: nested ? " M src/inside.ts\0" : " m libs/sub\0",
+        stderr: "",
+      };
+    if (command === "git" && args[0] === "ls-files")
+      return {
+        exitCode: 0,
+        stdout: nested
+          ? "100644 inside-object 0\tsrc/inside.ts\0"
+          : "160000 submodule-object 0\tlibs/sub\0",
+        stderr: "",
+      };
+    if (command === "git" && args[0] === "hash-object") {
+      assert.equal(nested, true);
+      return { exitCode: 0, stdout: "inside-hash\n", stderr: "" };
+    }
+    assert.fail(`Unexpected command: ${command} ${args.join(" ")}`);
+  };
+
+  const repository = repositoryEvidence("/repo", run);
+  assert.equal(repository.error, undefined);
+  assert.equal(repository.clean, false);
+  assert.match(repository.worktree[0]?.contentIdentity ?? "", /^submodule:[0-9a-f]{64}$/);
+  assert.equal(
+    calls.some(
+      (call) =>
+        !isSubmodule(call.cwd) &&
+        call.args[1] === "hash-object" &&
+        call.args.includes("libs/sub"),
+    ),
+    false,
+  );
+  assert.equal(
+    repository.executions.some(
+      (item) => isSubmodule(item.cwd ?? "") && item.command[1] === "hash-object",
+    ),
+    true,
+  );
 });
 
 test("rejects malformed, non-object, and exit-status-inconsistent tooling evidence", () => {
@@ -409,7 +473,7 @@ test("converges without duplicate tooling verification and validates the resulti
     report.validation?.layers.map((layer) => layer.id),
     validationLayers.map((layer) => layer.id),
   );
-  assert.equal(calls.length, validationLayers.length + 10);
+  assert.equal(calls.length, validationLayers.length + 13);
 });
 
 test("fails closed when validation mutates repository state", () => {
@@ -432,7 +496,7 @@ test("fails closed when validation mutates repository state", () => {
     "src/generated.ts",
     "validation-output.txt",
   ]);
-  assert.equal(calls.length, validationLayers.length + 10);
+  assert.equal(calls.length, validationLayers.length + 13);
 });
 
 test("does not validate after a blocked convergence operation", () => {
@@ -449,7 +513,7 @@ test("does not validate after a blocked convergence operation", () => {
   assert.deepEqual(report.repositoryDelta?.changedPaths, ["src/generated.ts"]);
   assert.equal(report.validationDelta, null);
   assert.equal(report.validation, null);
-  assert.equal(calls.length, 7);
+  assert.equal(calls.length, 9);
 });
 
 test("does not validate malformed convergence evidence", () => {
@@ -467,6 +531,8 @@ test("does not validate malformed convergence evidence", () => {
         stderr: "",
       };
     }
+    if (command === "git" && args[0] === "ls-files")
+      return { exitCode: 0, stdout: regularStageOutput(args), stderr: "" };
     if (command === "git" && args[0] === "hash-object")
       return { exitCode: 0, stdout: "partial-hash\n", stderr: "" };
     return { exitCode: 0, stdout: "not json", stderr: "" };
@@ -485,7 +551,7 @@ test("does not validate malformed convergence evidence", () => {
   assert.deepEqual(report.repositoryDelta?.changedPaths, ["src/partial.ts"]);
   assert.equal(report.validationDelta, null);
   assert.equal(report.validation, null);
-  assert.equal(calls.length, 6);
+  assert.equal(calls.length, 7);
 });
 
 test("uses a dedicated convergence report path by default", () => {
