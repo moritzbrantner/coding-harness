@@ -448,6 +448,7 @@ export function convergeRepository(
     repositoryBefore,
     repositoryAfter: null,
     repositoryDelta: null,
+    validationDelta: null,
     tooling: { ...tooling },
     convergence: null,
     validation: null,
@@ -482,8 +483,24 @@ export function convergeRepository(
 
   const validation = validateRepository(resolvedRoot, tooling, { runCommand });
   report.validation = validation;
-  report.repositoryAfter = validation.repository;
-  report.repositoryDelta = repositoryDelta(repositoryBefore, validation.repository);
+
+  const repositoryAfter = repositoryEvidence(resolvedRoot, runCommand);
+  report.repositoryAfter = repositoryAfter;
+  report.repositoryDelta = repositoryDelta(repositoryBefore, repositoryAfter);
+  report.validationDelta = repositoryDelta(validation.repository, repositoryAfter);
+
+  if (repositoryAfter.error) {
+    report.status = "error";
+    report.stoppedAt = "repository-after";
+    return report;
+  }
+
+  if (report.validationDelta.headChanged === true || report.validationDelta.worktreeChanged === true) {
+    report.status = "error";
+    report.stoppedAt = "validation:repository-mutated";
+    return report;
+  }
+
   report.status = validation.status;
   if (validation.status !== "passed")
     report.stoppedAt = `validation:${validation.stoppedAt ?? "unknown"}`;
