@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 
 import type {
@@ -192,6 +193,7 @@ function processEvidence(
   command: string,
   args: string[],
   execution: CommandExecution,
+  cwd?: string,
 ): ProcessEvidence {
   return {
     command: [command, ...args],
@@ -199,6 +201,7 @@ function processEvidence(
     stdout: execution.stdout,
     stderr: execution.stderr,
     error: execution.error,
+    cwd,
   };
 }
 
@@ -242,6 +245,60 @@ function parseStatusPorcelain(output: string): ParsedWorktree {
   return { statusPorcelain, worktree };
 }
 
+function gitlinkPaths(
+  root: string,
+  paths: string[],
+  runCommand: CommandRunner,
+  executions: ProcessEvidence[],
+): { paths: Set<string>; error?: string } {
+  const gitlinks = new Set<string>();
+
+  for (let start = 0; start < paths.length; start += worktreeHashBatchSize) {
+    const batch = paths.slice(start, start + worktreeHashBatchSize);
+    const stageArgs = ["ls-files", "--stage", "-z", "--", ...batch];
+    const stage = runCommand("git", stageArgs, root);
+    executions.push(processEvidence("git", stageArgs, stage, root));
+    if (stage.error || stage.exitCode !== 0) {
+      return {
+        paths: gitlinks,
+        error: stage.error ?? (stage.stderr.trim() || "Could not classify dirty worktree paths"),
+      };
+    }
+
+    for (const record of stage.stdout.split("\0")) {
+      if (!record) continue;
+      const separator = record.indexOf("\t");
+      if (separator < 0) {
+        return { paths: gitlinks, error: "Git returned malformed staged-path evidence" };
+      }
+      const metadata = record.slice(0, separator).trim().split(/\s+/);
+      const path = record.slice(separator + 1);
+      if (metadata.length < 3 || !path) {
+        return { paths: gitlinks, error: "Git returned malformed staged-path evidence" };
+      }
+      if (metadata[0] === "160000") gitlinks.add(path);
+    }
+  }
+
+  return { paths: gitlinks };
+}
+
+function repositoryContentIdentity(repository: RepositoryEvidence): string {
+  const worktree = sortedStrings(
+    repository.worktree.map((entry) =>
+      JSON.stringify([
+        entry.status,
+        entry.path,
+        entry.previousPath ?? null,
+        entry.contentIdentity,
+      ]),
+    ),
+  );
+  return createHash("sha256")
+    .update(JSON.stringify({ head: repository.head, worktree }))
+    .digest("hex");
+}
+
 function fingerprintWorktree(
   root: string,
   worktree: WorktreePathEvidence[],
@@ -253,12 +310,16 @@ function fingerprintWorktree(
   );
   if (paths.length === 0) return { worktree };
 
+  const classified = gitlinkPaths(root, paths, runCommand, executions);
+  if (classified.error) return { worktree, error: classified.error };
+
   const identities = new Map<string, string>();
-  for (let start = 0; start < paths.length; start += worktreeHashBatchSize) {
-    const batch = paths.slice(start, start + worktreeHashBatchSize);
+  const regularPaths = paths.filter((path) => !classified.paths.has(path));
+  for (let start = 0; start < regularPaths.length; start += worktreeHashBatchSize) {
+    const batch = regularPaths.slice(start, start + worktreeHashBatchSize);
     const hashArgs = ["hash-object", "--no-filters", "--", ...batch];
     const hash = runCommand("git", hashArgs, root);
-    executions.push(processEvidence("git", hashArgs, hash));
+    executions.push(processEvidence("git", hashArgs, hash, root));
     if (hash.error || hash.exitCode !== 0) {
       return {
         worktree,
@@ -278,6 +339,18 @@ function fingerprintWorktree(
     }
   }
 
+  for (const path of sortedStrings(classified.paths)) {
+    const nested = repositoryEvidence(resolve(root, path), runCommand);
+    executions.push(...nested.executions);
+    if (nested.error) {
+      return {
+        worktree,
+        error: `Could not fingerprint dirty submodule ${path}: ${nested.error}`,
+      };
+    }
+    identities.set(path, `submodule:${repositoryContentIdentity(nested)}`);
+  }
+
   return {
     worktree: worktree.map((entry) => ({
       ...entry,
@@ -290,7 +363,7 @@ export function repositoryEvidence(root: string, runCommand: CommandRunner): Rep
   const executions: ProcessEvidence[] = [];
   const headArgs = ["rev-parse", "HEAD"];
   const head = runCommand("git", headArgs, root);
-  executions.push(processEvidence("git", headArgs, head));
+  executions.push(processEvidence("git", headArgs, head, root));
   if (head.error || head.exitCode !== 0) {
     return {
       root,
@@ -305,7 +378,7 @@ export function repositoryEvidence(root: string, runCommand: CommandRunner): Rep
 
   const statusArgs = ["status", "--porcelain=v1", "-z", "--untracked-files=all"];
   const status = runCommand("git", statusArgs, root);
-  executions.push(processEvidence("git", statusArgs, status));
+  executions.push(processEvidence("git", statusArgs, status, root));
   if (status.error || status.exitCode !== 0) {
     return {
       root,
