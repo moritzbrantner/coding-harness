@@ -301,10 +301,7 @@ test("fingerprints dirty submodules without hashing their directories", () => {
   assert.match(repository.worktree[0]?.contentIdentity ?? "", /^submodule:[0-9a-f]{64}$/);
   assert.equal(
     calls.some(
-      (call) =>
-        !isSubmodule(call.cwd) &&
-        call.args[1] === "hash-object" &&
-        call.args.includes("libs/sub"),
+      (call) => !isSubmodule(call.cwd) && call.args[1] === "hash-object" && call.args.includes("libs/sub"),
     ),
     false,
   );
