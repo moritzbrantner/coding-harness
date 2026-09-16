@@ -226,7 +226,8 @@ export function repositoryDelta(
   before: RepositoryEvidence,
   after: RepositoryEvidence,
 ): RepositoryDelta {
-  const headChanged = before.head === null || after.head === null ? null : before.head !== after.head;
+  const headChanged =
+    before.head === null || after.head === null ? null : before.head !== after.head;
   if (before.error || after.error) {
     return { headChanged, worktreeChanged: null, changedPaths: [] };
   }
