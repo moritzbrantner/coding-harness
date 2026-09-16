@@ -495,7 +495,10 @@ export function convergeRepository(
     return report;
   }
 
-  if (report.validationDelta.headChanged === true || report.validationDelta.worktreeChanged === true) {
+  if (
+    report.validationDelta.headChanged === true ||
+    report.validationDelta.worktreeChanged === true
+  ) {
     report.status = "error";
     report.stoppedAt = "validation:repository-mutated";
     return report;
