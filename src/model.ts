@@ -75,6 +75,7 @@ export type ConvergenceReport = {
   repositoryBefore: RepositoryEvidence;
   repositoryAfter: RepositoryEvidence | null;
   repositoryDelta: RepositoryDelta | null;
+  validationDelta: RepositoryDelta | null;
   tooling: ToolingEvidence;
   convergence: LayerEvidence | null;
   validation: ValidationReport | null;
