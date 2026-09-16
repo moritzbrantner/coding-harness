@@ -18,6 +18,7 @@ export type CommandExecution = {
 
 export type ProcessEvidence = CommandExecution & {
   command: string[];
+  cwd?: string;
 };
 
 export type LayerEvidence = {
