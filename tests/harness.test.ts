@@ -72,6 +72,7 @@ function fakeRunner(statusByLayer: Partial<Record<string, ResultStatus>> = {}): 
 function fakeConvergenceRunner(
   convergeStatus: ResultStatus = "passed",
   statusByLayer: Partial<Record<string, ResultStatus>> = {},
+  mutateDuringValidation = false,
 ): { run: CommandRunner; calls: string[][] } {
   const calls: string[][] = [];
   let gitStatusCount = 0;
@@ -82,12 +83,15 @@ function fakeConvergenceRunner(
       return { exitCode: 0, stdout: "0123456789abcdef\n", stderr: "" };
     if (command === "git" && args[0] === "status") {
       gitStatusCount += 1;
+      const afterConvergence = " M src/existing.ts\0 M src/generated.ts\0";
       return {
         exitCode: 0,
         stdout:
           gitStatusCount === 1
             ? " M src/existing.ts\0"
-            : " M src/existing.ts\0 M src/generated.ts\0",
+            : mutateDuringValidation && gitStatusCount >= 3
+              ? `${afterConvergence}?? validation-output.txt\0`
+              : afterConvergence,
         stderr: "",
       };
     }
@@ -97,7 +101,13 @@ function fakeConvergenceRunner(
       return {
         exitCode: 0,
         stdout: `${paths
-          .map((path) => (path === "src/existing.ts" ? "existing-hash" : "generated-hash"))
+          .map((path) =>
+            path === "src/existing.ts"
+              ? "existing-hash"
+              : path === "src/generated.ts"
+                ? "generated-hash"
+                : "validation-output-hash",
+          )
           .join("\n")}\n`,
         stderr: "",
       };
@@ -388,13 +398,41 @@ test("converges without duplicate tooling verification and validates the resulti
     worktreeChanged: true,
     changedPaths: ["src/generated.ts"],
   });
+  assert.deepEqual(report.validationDelta, {
+    headChanged: false,
+    worktreeChanged: false,
+    changedPaths: [],
+  });
   assert.equal(report.validation?.status, "passed");
-  assert.equal(report.repositoryAfter, report.validation?.repository);
+  assert.deepEqual(report.repositoryAfter, report.validation?.repository);
   assert.deepEqual(
     report.validation?.layers.map((layer) => layer.id),
     validationLayers.map((layer) => layer.id),
   );
-  assert.equal(calls.length, validationLayers.length + 7);
+  assert.equal(calls.length, validationLayers.length + 10);
+});
+
+test("fails closed when validation mutates repository state", () => {
+  const { run, calls } = fakeConvergenceRunner("passed", {}, true);
+  const report = convergeRepository(
+    "/repo",
+    { command: "coding-tooling", prefixArgs: [] },
+    { runCommand: run },
+  );
+
+  assert.equal(report.validation?.status, "passed");
+  assert.equal(report.status, "error");
+  assert.equal(report.stoppedAt, "validation:repository-mutated");
+  assert.deepEqual(report.validationDelta, {
+    headChanged: false,
+    worktreeChanged: true,
+    changedPaths: ["validation-output.txt"],
+  });
+  assert.deepEqual(report.repositoryDelta?.changedPaths, [
+    "src/generated.ts",
+    "validation-output.txt",
+  ]);
+  assert.equal(calls.length, validationLayers.length + 10);
 });
 
 test("does not validate after a blocked convergence operation", () => {
@@ -409,6 +447,7 @@ test("does not validate after a blocked convergence operation", () => {
   assert.equal(report.stoppedAt, "converge");
   assert.equal(report.convergence?.status, "failed");
   assert.deepEqual(report.repositoryDelta?.changedPaths, ["src/generated.ts"]);
+  assert.equal(report.validationDelta, null);
   assert.equal(report.validation, null);
   assert.equal(calls.length, 7);
 });
@@ -444,6 +483,7 @@ test("does not validate malformed convergence evidence", () => {
   assert.equal(report.convergence?.error, "coding-tooling did not return valid JSON");
   assert.deepEqual(report.repositoryAfter?.statusPorcelain, [" M src/partial.ts"]);
   assert.deepEqual(report.repositoryDelta?.changedPaths, ["src/partial.ts"]);
+  assert.equal(report.validationDelta, null);
   assert.equal(report.validation, null);
   assert.equal(calls.length, 6);
 });
