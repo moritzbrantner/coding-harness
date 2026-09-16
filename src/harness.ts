@@ -286,12 +286,7 @@ function gitlinkPaths(
 function repositoryContentIdentity(repository: RepositoryEvidence): string {
   const worktree = sortedStrings(
     repository.worktree.map((entry) =>
-      JSON.stringify([
-        entry.status,
-        entry.path,
-        entry.previousPath ?? null,
-        entry.contentIdentity,
-      ]),
+      JSON.stringify([entry.status, entry.path, entry.previousPath ?? null, entry.contentIdentity]),
     ),
   );
   return createHash("sha256")
