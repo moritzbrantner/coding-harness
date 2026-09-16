@@ -226,6 +226,11 @@ export function repositoryDelta(
   before: RepositoryEvidence,
   after: RepositoryEvidence,
 ): RepositoryDelta {
+  const headChanged = before.head === null || after.head === null ? null : before.head !== after.head;
+  if (before.error || after.error) {
+    return { headChanged, worktreeChanged: null, changedPaths: [] };
+  }
+
   const beforeState = worktreeStateByPath(before.statusPorcelain);
   const afterState = worktreeStateByPath(after.statusPorcelain);
   const paths = new Set([...beforeState.keys(), ...afterState.keys()]);
@@ -234,8 +239,8 @@ export function repositoryDelta(
     .sort();
 
   return {
-    headChanged: before.head === null || after.head === null ? null : before.head !== after.head,
-    worktreeChanged: before.error || after.error ? null : changedPaths.length > 0,
+    headChanged,
+    worktreeChanged: changedPaths.length > 0,
     changedPaths,
   };
 }
@@ -318,6 +323,11 @@ export function convergeRepository(
     const repositoryAfter = repositoryEvidence(resolvedRoot, runCommand);
     report.repositoryAfter = repositoryAfter;
     report.repositoryDelta = repositoryDelta(repositoryBefore, repositoryAfter);
+    if (repositoryAfter.error) {
+      report.status = "error";
+      report.stoppedAt = "repository-after";
+      return report;
+    }
     report.status = convergence.status;
     report.stoppedAt = "converge";
     return report;
