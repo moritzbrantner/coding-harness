@@ -39,6 +39,12 @@ export type RepositoryEvidence = {
   error?: string;
 };
 
+export type RepositoryDelta = {
+  headChanged: boolean | null;
+  worktreeChanged: boolean | null;
+  changedPaths: string[];
+};
+
 export type ToolingEvidence = {
   command: string;
   prefixArgs: string[];
@@ -60,6 +66,7 @@ export type ConvergenceReport = {
   status: ResultStatus;
   repositoryBefore: RepositoryEvidence;
   repositoryAfter: RepositoryEvidence | null;
+  repositoryDelta: RepositoryDelta | null;
   tooling: ToolingEvidence;
   convergence: LayerEvidence | null;
   validation: ValidationReport | null;
