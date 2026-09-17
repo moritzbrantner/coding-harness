@@ -161,8 +161,8 @@ export class AgentTraceRecorder {
       status,
       durationMs: elapsed(this.runStartedAt, finishedAt, "run"),
       ...(this.options.environment ? { environment: this.options.environment } : {}),
-      invocations: this.invocations.toSorted(bySequence),
-      spans: this.spans.toSorted(bySequence),
+      invocations: [...this.invocations].sort(bySequence),
+      spans: [...this.spans].sort(bySequence),
     });
     this.closed = true;
     return trace;
@@ -217,6 +217,6 @@ export class AgentTraceRecorder {
   }
 
   private sortedIds<T>(values: Map<string, T>): string {
-    return [...values.keys()].toSorted().join(", ");
+    return [...values.keys()].sort().join(", ");
   }
 }
