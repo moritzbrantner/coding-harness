@@ -142,7 +142,9 @@ export class AgentTraceRecorder {
   public finish(status: ResultStatus): AgentRunTrace {
     this.assertOpen();
     if (this.openInvocations.size > 0) {
-      throw new Error(`cannot finish run with open invocations: ${this.sortedIds(this.openInvocations)}`);
+      throw new Error(
+        `cannot finish run with open invocations: ${this.sortedIds(this.openInvocations)}`,
+      );
     }
     if (this.openSpans.size > 0) {
       throw new Error(`cannot finish run with open spans: ${this.sortedIds(this.openSpans)}`);
