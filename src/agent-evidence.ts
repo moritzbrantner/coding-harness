@@ -47,6 +47,7 @@ export type AgentEnvironmentTrace = {
 export type AgentRunTrace = {
   schemaVersion: 1;
   runId: string;
+  attemptId?: string;
   taskHash: string;
   status: ResultStatus;
   durationMs: number;
@@ -128,6 +129,7 @@ export type AgentPerformanceEvidence = {
     "coding-harness.agent": {
       schema_version: 1;
       run_id: string;
+      attempt_id?: string;
       task_hash: string;
       status: ResultStatus;
       repository: RepositoryEvidence;
@@ -360,6 +362,7 @@ export function parseAgentRunTrace(value: unknown): AgentRunTrace {
     [
       "schemaVersion",
       "runId",
+      "attemptId",
       "taskHash",
       "status",
       "durationMs",
@@ -384,6 +387,9 @@ export function parseAgentRunTrace(value: unknown): AgentRunTrace {
     invocations: value.invocations.map(parseInvocation),
     spans: value.spans.map(parseSpan),
   };
+  if (value.attemptId !== undefined) {
+    trace.attemptId = assertString(value.attemptId, "agent run trace attemptId");
+  }
   const environment = parseEnvironment(value.environment);
   if (environment) trace.environment = environment;
 
@@ -714,6 +720,7 @@ export function buildAgentPerformanceEvidence(
       "coding-harness.agent": {
         schema_version: 1,
         run_id: trace.runId,
+        ...(trace.attemptId ? { attempt_id: trace.attemptId } : {}),
         task_hash: trace.taskHash,
         status: trace.status,
         repository,

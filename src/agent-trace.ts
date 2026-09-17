@@ -1,0 +1,302 @@
+import {
+  parseAgentRunTrace,
+  type AgentEnvironmentTrace,
+  type AgentInvocationTrace,
+  type AgentRunTrace,
+  type AgentSpanKind,
+  type AgentSpanTrace,
+  type AgentTokenUsage,
+} from "./agent-evidence.ts";
+import type { ResultStatus } from "./model.ts";
+
+export type AgentTraceRecorderOptions = {
+  runId: string;
+  attemptId?: string;
+  taskHash: string;
+  environment?: AgentEnvironmentTrace;
+  now?: () => number;
+};
+
+export type AgentInvocationStart = {
+  id: string;
+  stage: string;
+  provider: string;
+  model: string;
+  agent?: string;
+  attempt?: number;
+};
+
+export type AgentInvocationFinish = {
+  status: ResultStatus;
+  tokens?: AgentTokenUsage;
+};
+
+export type AgentSpanStart = {
+  id: string;
+  invocationId?: string;
+  stage?: string;
+  kind: AgentSpanKind;
+  name: string;
+};
+
+export type AgentInvocationHandle = {
+  finish(result: AgentInvocationFinish): AgentInvocationTrace;
+};
+
+export type AgentSpanHandle = {
+  finish(status: ResultStatus): AgentSpanTrace;
+};
+
+type OpenInvocation = {
+  input: AgentInvocationStart;
+  sequence: number;
+  startedAt: number;
+};
+
+type OpenSpan = {
+  input: AgentSpanStart;
+  sequence: number;
+  startedAt: number;
+};
+
+function assertClock(value: number, context: string): number {
+  if (!Number.isFinite(value)) throw new Error(`${context} clock value must be finite`);
+  return value;
+}
+
+function elapsed(startedAt: number, finishedAt: number, context: string): number {
+  const duration = finishedAt - startedAt;
+  if (duration < 0) throw new Error(`${context} clock moved backwards`);
+  return duration;
+}
+
+function bySequence<T extends { sequence: number; id: string }>(left: T, right: T): number {
+  return left.sequence - right.sequence || left.id.localeCompare(right.id);
+}
+
+function copyTokens(tokens: AgentTokenUsage | undefined): AgentTokenUsage | undefined {
+  if (!tokens) return undefined;
+  return {
+    ...(tokens.input !== undefined ? { input: tokens.input } : {}),
+    ...(tokens.cachedInput !== undefined ? { cachedInput: tokens.cachedInput } : {}),
+    ...(tokens.output !== undefined ? { output: tokens.output } : {}),
+    ...(tokens.reasoning !== undefined ? { reasoning: tokens.reasoning } : {}),
+  };
+}
+
+function copyEnvironment(
+  environment: AgentEnvironmentTrace | undefined,
+): AgentEnvironmentTrace | undefined {
+  if (!environment) return undefined;
+  return {
+    ...(environment.fingerprint !== undefined ? { fingerprint: environment.fingerprint } : {}),
+    ...(environment.platform ? { platform: { ...environment.platform } } : {}),
+    ...(environment.toolchain ? { toolchain: { ...environment.toolchain } } : {}),
+  };
+}
+
+function copyInvocationStart(input: AgentInvocationStart): AgentInvocationStart {
+  return {
+    id: input.id,
+    stage: input.stage,
+    provider: input.provider,
+    model: input.model,
+    ...(input.agent !== undefined ? { agent: input.agent } : {}),
+    ...(input.attempt !== undefined ? { attempt: input.attempt } : {}),
+  };
+}
+
+function copySpanStart(input: AgentSpanStart): AgentSpanStart {
+  return {
+    id: input.id,
+    ...(input.invocationId !== undefined ? { invocationId: input.invocationId } : {}),
+    ...(input.stage !== undefined ? { stage: input.stage } : {}),
+    kind: input.kind,
+    name: input.name,
+  };
+}
+
+function copyInvocationTrace(invocation: AgentInvocationTrace): AgentInvocationTrace {
+  return {
+    id: invocation.id,
+    sequence: invocation.sequence,
+    stage: invocation.stage,
+    provider: invocation.provider,
+    model: invocation.model,
+    ...(invocation.agent !== undefined ? { agent: invocation.agent } : {}),
+    ...(invocation.attempt !== undefined ? { attempt: invocation.attempt } : {}),
+    status: invocation.status,
+    durationMs: invocation.durationMs,
+    ...(invocation.tokens ? { tokens: copyTokens(invocation.tokens)! } : {}),
+  };
+}
+
+function copySpanTrace(span: AgentSpanTrace): AgentSpanTrace {
+  return {
+    id: span.id,
+    sequence: span.sequence,
+    ...(span.invocationId !== undefined ? { invocationId: span.invocationId } : {}),
+    ...(span.stage !== undefined ? { stage: span.stage } : {}),
+    kind: span.kind,
+    name: span.name,
+    status: span.status,
+    durationMs: span.durationMs,
+  };
+}
+
+export class AgentTraceRecorder {
+  private readonly runId: string;
+  private readonly attemptId: string | undefined;
+  private readonly taskHash: string;
+  private readonly environment: AgentEnvironmentTrace | undefined;
+  private readonly now: () => number;
+  private readonly runStartedAt: number;
+  private readonly invocations: AgentInvocationTrace[] = [];
+  private readonly spans: AgentSpanTrace[] = [];
+  private readonly openInvocations = new Map<string, OpenInvocation>();
+  private readonly openSpans = new Map<string, OpenSpan>();
+  private readonly invocationIds = new Set<string>();
+  private readonly spanIds = new Set<string>();
+  private nextSequence = 1;
+  private lastClock: number | null = null;
+  private closed = false;
+
+  public constructor(options: AgentTraceRecorderOptions) {
+    this.runId = options.runId;
+    this.attemptId = options.attemptId;
+    this.taskHash = options.taskHash;
+    this.environment = copyEnvironment(options.environment);
+    this.now = options.now ?? performance.now.bind(performance);
+    this.runStartedAt = this.readClock("run start");
+  }
+
+  public startInvocation(input: AgentInvocationStart): AgentInvocationHandle {
+    this.assertOpen();
+    if (this.invocationIds.has(input.id)) throw new Error(`duplicate invocation id ${input.id}`);
+
+    const startedAt = this.readClock(`invocation ${input.id} start`);
+    const open: OpenInvocation = {
+      input: copyInvocationStart(input),
+      sequence: this.nextSequence++,
+      startedAt,
+    };
+    this.invocationIds.add(input.id);
+    this.openInvocations.set(input.id, open);
+
+    let finished = false;
+    return {
+      finish: (result) => {
+        if (finished) throw new Error(`invocation ${input.id} is already finished`);
+        const invocation = this.finishInvocation(input.id, result);
+        finished = true;
+        return invocation;
+      },
+    };
+  }
+
+  public startSpan(input: AgentSpanStart): AgentSpanHandle {
+    this.assertOpen();
+    if (this.spanIds.has(input.id)) throw new Error(`duplicate span id ${input.id}`);
+    if (input.invocationId && !this.invocationIds.has(input.invocationId)) {
+      throw new Error(`span ${input.id} references unknown invocation ${input.invocationId}`);
+    }
+
+    const startedAt = this.readClock(`span ${input.id} start`);
+    const open: OpenSpan = {
+      input: copySpanStart(input),
+      sequence: this.nextSequence++,
+      startedAt,
+    };
+    this.spanIds.add(input.id);
+    this.openSpans.set(input.id, open);
+
+    let finished = false;
+    return {
+      finish: (status) => {
+        if (finished) throw new Error(`span ${input.id} is already finished`);
+        const span = this.finishSpan(input.id, status);
+        finished = true;
+        return span;
+      },
+    };
+  }
+
+  public finish(status: ResultStatus): AgentRunTrace {
+    this.assertOpen();
+    if (this.openInvocations.size > 0) {
+      throw new Error(
+        `cannot finish run with open invocations: ${this.sortedIds(this.openInvocations)}`,
+      );
+    }
+    if (this.openSpans.size > 0) {
+      throw new Error(`cannot finish run with open spans: ${this.sortedIds(this.openSpans)}`);
+    }
+
+    const finishedAt = this.readClock("run finish");
+    const trace = parseAgentRunTrace({
+      schemaVersion: 1,
+      runId: this.runId,
+      ...(this.attemptId !== undefined ? { attemptId: this.attemptId } : {}),
+      taskHash: this.taskHash,
+      status,
+      durationMs: elapsed(this.runStartedAt, finishedAt, "run"),
+      ...(this.environment ? { environment: copyEnvironment(this.environment) } : {}),
+      invocations: this.invocations.map(copyInvocationTrace).sort(bySequence),
+      spans: this.spans.map(copySpanTrace).sort(bySequence),
+    });
+    this.closed = true;
+    return trace;
+  }
+
+  private finishInvocation(id: string, result: AgentInvocationFinish): AgentInvocationTrace {
+    this.assertOpen();
+    const open = this.openInvocations.get(id);
+    if (!open) throw new Error(`invocation ${id} is not open`);
+
+    const finishedAt = this.readClock(`invocation ${id} finish`);
+    const invocation: AgentInvocationTrace = {
+      ...open.input,
+      sequence: open.sequence,
+      status: result.status,
+      durationMs: elapsed(open.startedAt, finishedAt, `invocation ${id}`),
+      ...(result.tokens ? { tokens: copyTokens(result.tokens)! } : {}),
+    };
+    this.invocations.push(copyInvocationTrace(invocation));
+    this.openInvocations.delete(id);
+    return copyInvocationTrace(invocation);
+  }
+
+  private finishSpan(id: string, status: ResultStatus): AgentSpanTrace {
+    this.assertOpen();
+    const open = this.openSpans.get(id);
+    if (!open) throw new Error(`span ${id} is not open`);
+
+    const finishedAt = this.readClock(`span ${id} finish`);
+    const span: AgentSpanTrace = {
+      ...open.input,
+      sequence: open.sequence,
+      status,
+      durationMs: elapsed(open.startedAt, finishedAt, `span ${id}`),
+    };
+    this.spans.push(copySpanTrace(span));
+    this.openSpans.delete(id);
+    return copySpanTrace(span);
+  }
+
+  private readClock(context: string): number {
+    const value = assertClock(this.now(), context);
+    if (this.lastClock !== null && value < this.lastClock) {
+      throw new Error(`${context} clock moved backwards`);
+    }
+    this.lastClock = value;
+    return value;
+  }
+
+  private assertOpen(): void {
+    if (this.closed) throw new Error("agent trace recorder is already finished");
+  }
+
+  private sortedIds<T>(values: Map<string, T>): string {
+    return [...values.keys()].sort().join(", ");
+  }
+}

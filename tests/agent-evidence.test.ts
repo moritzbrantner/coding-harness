@@ -45,6 +45,7 @@ test("aggregates agent tokens and time into performance evidence", () => {
   const trace = parseAgentRunTrace({
     schemaVersion: 1,
     runId: "run-17",
+    attemptId: "run-17-attempt-2",
     taskHash,
     status: "passed",
     durationMs: 12000,
@@ -112,6 +113,7 @@ test("aggregates agent tokens and time into performance evidence", () => {
   assert.equal(measurement(evidence, "agent.stage.repair.span.ci.duration_ms"), 3000);
   assert.equal(measurement(evidence, "agent.run.time_to_green_ms"), 12000);
   assert.equal(measurement(evidence, "agent.stage.repair.input_tokens"), 300);
+  assert.equal(evidence.extensions["coding-harness.agent"].attempt_id, "run-17-attempt-2");
   assert.deepEqual(evidence.extensions["coding-harness.agent"].repository, repository);
   assert.deepEqual(
     evidence.extensions["coding-harness.agent"].invocations.map((item) => item.id),
@@ -148,6 +150,7 @@ test("does not turn unreported token categories into zero usage", () => {
   const evidence = buildAgentPerformanceEvidence(trace, repository);
   assert.equal(measurement(evidence, "agent.input_tokens"), undefined);
   assert.equal(measurement(evidence, "agent.run.time_to_green_ms"), undefined);
+  assert.equal(evidence.extensions["coding-harness.agent"].attempt_id, undefined);
   assert.deepEqual(evidence.extensions["coding-harness.agent"].stage_totals[0]?.tokens, {});
 });
 
@@ -196,7 +199,7 @@ test("omits partial token aggregates at run, stage, and model level", () => {
   assert.equal(extension.model_totals[0]?.tokens.output, 55);
 });
 
-test("rejects transcript-like fields and broken references", () => {
+test("rejects transcript-like fields, empty attempt identity, and broken references", () => {
   assert.throws(
     () =>
       parseAgentRunTrace({
@@ -210,6 +213,21 @@ test("rejects transcript-like fields and broken references", () => {
         spans: [],
       }),
     /unknown field prompt/,
+  );
+
+  assert.throws(
+    () =>
+      parseAgentRunTrace({
+        schemaVersion: 1,
+        runId: "run-19-attempt",
+        attemptId: "",
+        taskHash,
+        status: "passed",
+        durationMs: 1,
+        invocations: [],
+        spans: [],
+      }),
+    /attemptId must be a non-empty string/,
   );
 
   assert.throws(

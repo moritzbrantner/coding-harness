@@ -42,6 +42,8 @@ The default convergence report is written to `.artifacts/coding-harness/converge
 
 `agent-evidence` turns a provider-neutral coding-agent trace into the canonical `performance-evidence` `1.0.0` shape. It tracks token categories and time at run, invocation, stage, model, and tool/CI/wait-span level while preserving exact repository provenance.
 
+`AgentTraceRecorder` is the recording foundation for real agent wrappers. It assigns sequence numbers when work starts and measures run, invocation, and span durations from one monotonic clock. Provider integrations only supply identity, outcome, and token categories actually reported by the provider; they do not calculate timing or construct trace JSON manually.
+
 The trace contract accepts hashes and stable IDs rather than prompt or response bodies. Missing provider token categories remain unreported instead of being treated as zero, and wall-clock time is kept separate from cumulative invocation/span duration so overlapping work is not double-counted.
 
 The default report is `.artifacts/coding-harness/agent-performance.json`. See `docs/agent-evidence.md` and `fixtures/agent-run.json` for the contract and an example.
@@ -86,4 +88,4 @@ This boundary is deliberate: the harness should not become another analyzer, ano
 
 ## Next slices
 
-The next useful agent-evidence slice is provider adapters that translate native coding-agent usage/timing responses into the provider-neutral trace contract. Environment bootstrap/verification, hosted/Pages acceptance, and fleet execution should continue reusing the same evidence contracts instead of adding parallel report formats.
+The next useful agent-evidence slice is provider adapters that translate native coding-agent usage results into `AgentTraceRecorder` completion data. Environment bootstrap/verification, hosted/Pages acceptance, and fleet execution should continue reusing the same evidence contracts instead of adding parallel report formats.
