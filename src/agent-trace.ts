@@ -11,6 +11,7 @@ import type { ResultStatus } from "./model.ts";
 
 export type AgentTraceRecorderOptions = {
   runId: string;
+  attemptId?: string;
   taskHash: string;
   environment?: AgentEnvironmentTrace;
   now?: () => number;
@@ -157,6 +158,7 @@ export class AgentTraceRecorder {
     const trace = parseAgentRunTrace({
       schemaVersion: 1,
       runId: this.options.runId,
+      ...(this.options.attemptId ? { attemptId: this.options.attemptId } : {}),
       taskHash: this.options.taskHash,
       status,
       durationMs: elapsed(this.runStartedAt, finishedAt, "run"),
