@@ -83,6 +83,7 @@ export class AgentTraceRecorder {
   private readonly invocationIds = new Set<string>();
   private readonly spanIds = new Set<string>();
   private nextSequence = 1;
+  private lastClock: number | null = null;
   private closed = false;
 
   public constructor(private readonly options: AgentTraceRecorderOptions) {
@@ -158,8 +159,8 @@ export class AgentTraceRecorder {
       status,
       durationMs: elapsed(this.runStartedAt, finishedAt, "run"),
       ...(this.options.environment ? { environment: this.options.environment } : {}),
-      invocations: [...this.invocations].sort(bySequence),
-      spans: [...this.spans].sort(bySequence),
+      invocations: this.invocations.toSorted(bySequence),
+      spans: this.spans.toSorted(bySequence),
     });
     this.closed = true;
     return trace;
@@ -201,14 +202,19 @@ export class AgentTraceRecorder {
   }
 
   private readClock(context: string): number {
-    return assertClock(this.now(), context);
+    const value = assertClock(this.now(), context);
+    if (this.lastClock !== null && value < this.lastClock) {
+      throw new Error(`${context} clock moved backwards`);
+    }
+    this.lastClock = value;
+    return value;
   }
 
   private assertOpen(): void {
     if (this.closed) throw new Error("agent trace recorder is already finished");
   }
 
-  private sortedIds(values: Map<string, unknown>): string {
-    return [...values.keys()].sort().join(", ");
+  private sortedIds<T>(values: Map<string, T>): string {
+    return [...values.keys()].toSorted().join(", ");
   }
 }
