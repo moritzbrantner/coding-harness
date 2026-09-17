@@ -38,6 +38,14 @@ A `partial` tooling convergence result is still a successful deterministic fixed
 
 The default convergence report is written to `.artifacts/coding-harness/convergence.json`.
 
+## Agent performance evidence
+
+`agent-evidence` turns a provider-neutral coding-agent trace into the canonical `performance-evidence` `1.0.0` shape. It tracks token categories and time at run, invocation, stage, model, and tool/CI/wait-span level while preserving exact repository provenance.
+
+The trace contract accepts hashes and stable IDs rather than prompt or response bodies. Missing provider token categories remain unreported instead of being treated as zero, and wall-clock time is kept separate from cumulative invocation/span duration so overlapping work is not double-counted.
+
+The default report is `.artifacts/coding-harness/agent-performance.json`. See `docs/agent-evidence.md` and `fixtures/agent-run.json` for the contract and an example.
+
 ## Usage
 
 With `coding-tooling` installed on `PATH`:
@@ -45,6 +53,9 @@ With `coding-tooling` installed on `PATH`:
 ```bash
 coding-harness validate --root ../media-player
 coding-harness converge --root ../media-player
+coding-harness agent-evidence \
+  --root ../media-player \
+  --input /path/to/agent-run.json
 ```
 
 Against a local `coding-tooling` checkout:
@@ -68,10 +79,11 @@ coding-harness converge --root ../media-player --json
 - `coding-agent-conventions`: durable code and engineering policy.
 - `coding-tooling`: deterministic analysis, capabilities, conformance, normalization, and convergence mechanics.
 - `coding-harness`: orchestration, layer sequencing, stop/escalation decisions, and evidence aggregation.
+- `performance-evidence`: portable performance-evidence vocabulary, comparison, and downstream presentation.
 - target repository: its actual test/build/runtime commands and local exceptions.
 
-This boundary is deliberate: the harness should not become another analyzer or another repository-script registry.
+This boundary is deliberate: the harness should not become another analyzer, another repository-script registry, or a provider-specific telemetry parser.
 
 ## Next slices
 
-The next useful slices are environment bootstrap/verification, hosted/Pages acceptance, and finally fleet execution. Those should reuse the existing evidence contracts instead of adding parallel report formats.
+The next useful agent-evidence slice is provider adapters that translate native coding-agent usage/timing responses into the provider-neutral trace contract. Environment bootstrap/verification, hosted/Pages acceptance, and fleet execution should continue reusing the same evidence contracts instead of adding parallel report formats.
