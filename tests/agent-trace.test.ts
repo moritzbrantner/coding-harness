@@ -22,6 +22,7 @@ test("records invocation, span, token, and run durations from one monotonic cloc
   const clock = controlledClock();
   const recorder = new AgentTraceRecorder({
     runId: "run-recorder-1",
+    attemptId: "run-recorder-1-attempt-1",
     taskHash,
     environment: { platform: { os: "test" } },
     now: clock.now,
@@ -50,6 +51,7 @@ test("records invocation, span, token, and run durations from one monotonic cloc
   clock.set(1100);
 
   const trace = recorder.finish("passed");
+  assert.equal(trace.attemptId, "run-recorder-1-attempt-1");
   assert.equal(trace.durationMs, 100);
   assert.deepEqual(trace.invocations, [
     {
@@ -75,6 +77,18 @@ test("records invocation, span, token, and run durations from one monotonic cloc
     },
   ]);
   assert.deepEqual(trace.environment, { platform: { os: "test" } });
+});
+
+test("standalone recorder does not synthesize attempt identity", () => {
+  const clock = controlledClock();
+  const recorder = new AgentTraceRecorder({
+    runId: "run-recorder-standalone",
+    taskHash,
+    now: clock.now,
+  });
+  clock.set(1010);
+  const trace = recorder.finish("passed");
+  assert.equal(trace.attemptId, undefined);
 });
 
 test("assigns sequence at start so completion order cannot rewrite causality", () => {
