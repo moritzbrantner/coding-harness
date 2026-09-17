@@ -74,7 +74,81 @@ function bySequence<T extends { sequence: number; id: string }>(left: T, right: 
   return left.sequence - right.sequence || left.id.localeCompare(right.id);
 }
 
+function copyTokens(tokens: AgentTokenUsage | undefined): AgentTokenUsage | undefined {
+  if (!tokens) return undefined;
+  return {
+    ...(tokens.input !== undefined ? { input: tokens.input } : {}),
+    ...(tokens.cachedInput !== undefined ? { cachedInput: tokens.cachedInput } : {}),
+    ...(tokens.output !== undefined ? { output: tokens.output } : {}),
+    ...(tokens.reasoning !== undefined ? { reasoning: tokens.reasoning } : {}),
+  };
+}
+
+function copyEnvironment(
+  environment: AgentEnvironmentTrace | undefined,
+): AgentEnvironmentTrace | undefined {
+  if (!environment) return undefined;
+  return {
+    ...(environment.fingerprint !== undefined ? { fingerprint: environment.fingerprint } : {}),
+    ...(environment.platform ? { platform: { ...environment.platform } } : {}),
+    ...(environment.toolchain ? { toolchain: { ...environment.toolchain } } : {}),
+  };
+}
+
+function copyInvocationStart(input: AgentInvocationStart): AgentInvocationStart {
+  return {
+    id: input.id,
+    stage: input.stage,
+    provider: input.provider,
+    model: input.model,
+    ...(input.agent !== undefined ? { agent: input.agent } : {}),
+    ...(input.attempt !== undefined ? { attempt: input.attempt } : {}),
+  };
+}
+
+function copySpanStart(input: AgentSpanStart): AgentSpanStart {
+  return {
+    id: input.id,
+    ...(input.invocationId !== undefined ? { invocationId: input.invocationId } : {}),
+    ...(input.stage !== undefined ? { stage: input.stage } : {}),
+    kind: input.kind,
+    name: input.name,
+  };
+}
+
+function copyInvocationTrace(invocation: AgentInvocationTrace): AgentInvocationTrace {
+  return {
+    id: invocation.id,
+    sequence: invocation.sequence,
+    stage: invocation.stage,
+    provider: invocation.provider,
+    model: invocation.model,
+    ...(invocation.agent !== undefined ? { agent: invocation.agent } : {}),
+    ...(invocation.attempt !== undefined ? { attempt: invocation.attempt } : {}),
+    status: invocation.status,
+    durationMs: invocation.durationMs,
+    ...(invocation.tokens ? { tokens: copyTokens(invocation.tokens)! } : {}),
+  };
+}
+
+function copySpanTrace(span: AgentSpanTrace): AgentSpanTrace {
+  return {
+    id: span.id,
+    sequence: span.sequence,
+    ...(span.invocationId !== undefined ? { invocationId: span.invocationId } : {}),
+    ...(span.stage !== undefined ? { stage: span.stage } : {}),
+    kind: span.kind,
+    name: span.name,
+    status: span.status,
+    durationMs: span.durationMs,
+  };
+}
+
 export class AgentTraceRecorder {
+  private readonly runId: string;
+  private readonly attemptId: string | undefined;
+  private readonly taskHash: string;
+  private readonly environment: AgentEnvironmentTrace | undefined;
   private readonly now: () => number;
   private readonly runStartedAt: number;
   private readonly invocations: AgentInvocationTrace[] = [];
@@ -87,7 +161,11 @@ export class AgentTraceRecorder {
   private lastClock: number | null = null;
   private closed = false;
 
-  public constructor(private readonly options: AgentTraceRecorderOptions) {
+  public constructor(options: AgentTraceRecorderOptions) {
+    this.runId = options.runId;
+    this.attemptId = options.attemptId;
+    this.taskHash = options.taskHash;
+    this.environment = copyEnvironment(options.environment);
     this.now = options.now ?? performance.now.bind(performance);
     this.runStartedAt = this.readClock("run start");
   }
@@ -98,7 +176,7 @@ export class AgentTraceRecorder {
 
     const startedAt = this.readClock(`invocation ${input.id} start`);
     const open: OpenInvocation = {
-      input: { ...input },
+      input: copyInvocationStart(input),
       sequence: this.nextSequence++,
       startedAt,
     };
@@ -125,7 +203,7 @@ export class AgentTraceRecorder {
 
     const startedAt = this.readClock(`span ${input.id} start`);
     const open: OpenSpan = {
-      input: { ...input },
+      input: copySpanStart(input),
       sequence: this.nextSequence++,
       startedAt,
     };
@@ -157,14 +235,14 @@ export class AgentTraceRecorder {
     const finishedAt = this.readClock("run finish");
     const trace = parseAgentRunTrace({
       schemaVersion: 1,
-      runId: this.options.runId,
-      ...(this.options.attemptId !== undefined ? { attemptId: this.options.attemptId } : {}),
-      taskHash: this.options.taskHash,
+      runId: this.runId,
+      ...(this.attemptId !== undefined ? { attemptId: this.attemptId } : {}),
+      taskHash: this.taskHash,
       status,
       durationMs: elapsed(this.runStartedAt, finishedAt, "run"),
-      ...(this.options.environment ? { environment: this.options.environment } : {}),
-      invocations: [...this.invocations].sort(bySequence),
-      spans: [...this.spans].sort(bySequence),
+      ...(this.environment ? { environment: copyEnvironment(this.environment) } : {}),
+      invocations: this.invocations.map(copyInvocationTrace).sort(bySequence),
+      spans: this.spans.map(copySpanTrace).sort(bySequence),
     });
     this.closed = true;
     return trace;
@@ -181,11 +259,11 @@ export class AgentTraceRecorder {
       sequence: open.sequence,
       status: result.status,
       durationMs: elapsed(open.startedAt, finishedAt, `invocation ${id}`),
-      ...(result.tokens ? { tokens: { ...result.tokens } } : {}),
+      ...(result.tokens ? { tokens: copyTokens(result.tokens)! } : {}),
     };
-    this.invocations.push(invocation);
+    this.invocations.push(copyInvocationTrace(invocation));
     this.openInvocations.delete(id);
-    return invocation;
+    return copyInvocationTrace(invocation);
   }
 
   private finishSpan(id: string, status: ResultStatus): AgentSpanTrace {
@@ -200,9 +278,9 @@ export class AgentTraceRecorder {
       status,
       durationMs: elapsed(open.startedAt, finishedAt, `span ${id}`),
     };
-    this.spans.push(span);
+    this.spans.push(copySpanTrace(span));
     this.openSpans.delete(id);
-    return span;
+    return copySpanTrace(span);
   }
 
   private readClock(context: string): number {
