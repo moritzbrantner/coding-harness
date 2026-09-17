@@ -69,6 +69,10 @@ function elapsed(startedAt: number, finishedAt: number, context: string): number
   return duration;
 }
 
+function bySequence<T extends { sequence: number; id: string }>(left: T, right: T): number {
+  return left.sequence - right.sequence || left.id.localeCompare(right.id);
+}
+
 export class AgentTraceRecorder {
   private readonly now: () => number;
   private readonly runStartedAt: number;
@@ -152,8 +156,8 @@ export class AgentTraceRecorder {
       status,
       durationMs: elapsed(this.runStartedAt, finishedAt, "run"),
       ...(this.options.environment ? { environment: this.options.environment } : {}),
-      invocations: this.invocations,
-      spans: this.spans,
+      invocations: [...this.invocations].sort(bySequence),
+      spans: [...this.spans].sort(bySequence),
     });
     this.closed = true;
     return trace;
