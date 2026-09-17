@@ -91,6 +91,18 @@ test("standalone recorder does not synthesize attempt identity", () => {
   assert.equal(trace.attemptId, undefined);
 });
 
+test("rejects an explicitly empty attempt identity", () => {
+  const clock = controlledClock();
+  const recorder = new AgentTraceRecorder({
+    runId: "run-recorder-empty-attempt",
+    attemptId: "",
+    taskHash,
+    now: clock.now,
+  });
+  clock.set(1010);
+  assert.throws(() => recorder.finish("passed"), /attemptId must be a non-empty string/);
+});
+
 test("assigns sequence at start so completion order cannot rewrite causality", () => {
   const clock = controlledClock();
   const recorder = new AgentTraceRecorder({ runId: "run-recorder-2", taskHash, now: clock.now });
