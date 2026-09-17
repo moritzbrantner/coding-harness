@@ -9,6 +9,7 @@ The harness owns collection and aggregation. `performance-evidence` remains auth
 The input trace records one task run with ordered agent invocations and child spans:
 
 - `runId`: stable run identity. It is retained in the namespaced extension and hashed for the generic workload id.
+- `attemptId`: optional stable attempt identity supplied by an external execution authority such as `agent-loop-orchestrator`. It is correlation metadata only and is not synthesized for standalone harness runs or included in workload identity.
 - `taskHash`: SHA-256 identity for the task/workload. Raw task or prompt text is not accepted.
 - `status` and `durationMs`: final outcome and wall-clock duration for the whole run.
 - `invocations`: provider/model, stage, attempt, status, duration, and provider-reported token categories.
@@ -24,7 +25,7 @@ Unknown fields fail closed. In particular, prompt and response bodies are not pa
 `AgentTraceRecorder` is the preferred way for agent wrappers and harness integrations to create a trace. Callers no longer need to calculate durations or sequence numbers themselves.
 
 ```ts
-const recorder = new AgentTraceRecorder({ runId, taskHash });
+const recorder = new AgentTraceRecorder({ runId, attemptId, taskHash });
 const invocation = recorder.startInvocation({
   id: "implement-1",
   stage: "implement",
@@ -45,6 +46,8 @@ tool.finish("passed");
 invocation.finish({ status: "passed", tokens: normalizedProviderTokens });
 const trace = recorder.finish("passed");
 ```
+
+`attemptId` is optional in that example. Pass it only when an execution authority already owns a stable attempt identity; direct harness usage remains valid with `{ runId, taskHash }`.
 
 The recorder uses one monotonic clock for run, invocation, and span timing. Sequence numbers are assigned when work starts and final traces are serialized in sequence order, so concurrent completion order cannot rewrite causality. A run cannot finish while invocations or spans remain open, duplicate IDs fail closed, unknown invocation references are rejected, and a backwards or non-finite clock is an error.
 
@@ -80,7 +83,7 @@ The generic document uses the `performance-evidence` `1.0.0` structure:
 - `useful_work`: passing agent invocations;
 - `induced_work`: invocation count, retries, token categories, invocation duration, span count, stage breakdowns, and span-kind durations;
 - `outcomes`: wall duration, success indicator, non-passing invocation count, and time-to-green for successful runs;
-- `extensions["coding-harness.agent"]`: complete repository provenance, ordered invocation/span details, and deterministic stage and provider/model totals.
+- `extensions["coding-harness.agent"]`: optional stable attempt correlation, complete repository provenance, ordered invocation/span details, and deterministic stage and provider/model totals.
 
 The source revision and dirty-worktree flag are captured from the target repository when the evidence document is produced. The namespaced extension retains the complete repository inspection evidence used to establish that source identity. Collection fails closed when exact repository provenance cannot be established.
 
