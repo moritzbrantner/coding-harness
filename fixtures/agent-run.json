@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "runId": "example-run-1",
+  "taskHash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "status": "passed",
+  "durationMs": 14000,
+  "invocations": [
+    {
+      "id": "inspect-1",
+      "sequence": 1,
+      "stage": "inspect",
+      "provider": "openai",
+      "model": "example-model",
+      "status": "passed",
+      "durationMs": 3200,
+      "tokens": {
+        "input": 1200,
+        "cachedInput": 800,
+        "output": 260
+      }
+    },
+    {
+      "id": "implement-1",
+      "sequence": 2,
+      "stage": "implement",
+      "provider": "openai",
+      "model": "example-model",
+      "status": "passed",
+      "durationMs": 6100,
+      "tokens": {
+        "input": 1800,
+        "cachedInput": 1200,
+        "output": 520,
+        "reasoning": 140
+      }
+    }
+  ],
+  "spans": [
+    {
+      "id": "tool-1",
+      "sequence": 1,
+      "invocationId": "inspect-1",
+      "kind": "tool",
+      "name": "repository-search",
+      "status": "passed",
+      "durationMs": 700
+    },
+    {
+      "id": "ci-1",
+      "sequence": 2,
+      "invocationId": "implement-1",
+      "kind": "ci",
+      "name": "exact-head-validation",
+      "status": "passed",
+      "durationMs": 3600
+    }
+  ]
+}
