@@ -39,7 +39,7 @@ const tool = recorder.startSpan({
   name: "repository-search",
 });
 // run tool
- tool.finish("passed");
+tool.finish("passed");
 
 // run provider invocation and read its native usage result
 invocation.finish({ status: "passed", tokens: normalizedProviderTokens });
