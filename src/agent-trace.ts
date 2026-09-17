@@ -158,7 +158,7 @@ export class AgentTraceRecorder {
     const trace = parseAgentRunTrace({
       schemaVersion: 1,
       runId: this.options.runId,
-      ...(this.options.attemptId ? { attemptId: this.options.attemptId } : {}),
+      ...(this.options.attemptId !== undefined ? { attemptId: this.options.attemptId } : {}),
       taskHash: this.options.taskHash,
       status,
       durationMs: elapsed(this.runStartedAt, finishedAt, "run"),
