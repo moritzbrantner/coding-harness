@@ -18,6 +18,7 @@ export type CommandExecution = {
 
 export type ProcessEvidence = CommandExecution & {
   command: string[];
+  cwd?: string;
 };
 
 export type LayerEvidence = {
@@ -30,13 +31,32 @@ export type LayerEvidence = {
   error?: string;
 };
 
+export type WorktreePathEvidence = {
+  status: string;
+  path: string;
+  previousPath?: string;
+  contentIdentity: string | null;
+};
+
 export type RepositoryEvidence = {
   root: string;
   head: string | null;
   clean: boolean | null;
   statusPorcelain: string[];
+  worktree: WorktreePathEvidence[];
   executions: ProcessEvidence[];
   error?: string;
+};
+
+export type RepositoryDelta = {
+  headChanged: boolean | null;
+  worktreeChanged: boolean | null;
+  changedPaths: string[];
+};
+
+export type ToolingEvidence = {
+  command: string;
+  prefixArgs: string[];
 };
 
 export type ValidationReport = {
@@ -44,11 +64,22 @@ export type ValidationReport = {
   operation: "validate";
   status: ResultStatus;
   repository: RepositoryEvidence;
-  tooling: {
-    command: string;
-    prefixArgs: string[];
-  };
+  tooling: ToolingEvidence;
   layers: LayerEvidence[];
+  stoppedAt: string | null;
+};
+
+export type ConvergenceReport = {
+  schemaVersion: 1;
+  operation: "converge";
+  status: ResultStatus;
+  repositoryBefore: RepositoryEvidence;
+  repositoryAfter: RepositoryEvidence | null;
+  repositoryDelta: RepositoryDelta | null;
+  validationDelta: RepositoryDelta | null;
+  tooling: ToolingEvidence;
+  convergence: LayerEvidence | null;
+  validation: ValidationReport | null;
   stoppedAt: string | null;
 };
 

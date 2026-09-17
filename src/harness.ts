@@ -1,14 +1,18 @@
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 
 import type {
   CommandExecution,
   CommandRunner,
+  ConvergenceReport,
   LayerEvidence,
   ProcessEvidence,
+  RepositoryDelta,
   RepositoryEvidence,
   ResultStatus,
   ToolEnvelope,
   ValidationReport,
+  WorktreePathEvidence,
 } from "./model.ts";
 import { runCommand as defaultRunCommand } from "./process.ts";
 
@@ -18,6 +22,8 @@ const expectedExitCodes: Record<ResultStatus, number> = {
   unavailable: 2,
   error: 3,
 };
+
+const worktreeHashBatchSize = 128;
 
 export const validationLayers = [
   { id: "discovery", args: ["inspect", "--json"] },
@@ -44,12 +50,41 @@ export type HarnessDependencies = {
   runCommand?: CommandRunner;
 };
 
+type ParsedWorktree = {
+  statusPorcelain: string[];
+  worktree: WorktreePathEvidence[];
+  error?: string;
+};
+
+function sortedStrings(values: Iterable<string>): string[] {
+  const sorted: string[] = [];
+  for (const value of values) {
+    let low = 0;
+    let high = sorted.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (sorted[middle]! < value) low = middle + 1;
+      else high = middle;
+    }
+    sorted.splice(low, 0, value);
+  }
+  return sorted;
+}
+
 function isResultStatus(value: unknown): value is ResultStatus {
   return value === "passed" || value === "failed" || value === "unavailable" || value === "error";
 }
 
 function isToolEnvelope(value: unknown): value is ToolEnvelope {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function invalidLayer(evidence: LayerEvidence, error: string): LayerEvidence {
+  return {
+    ...evidence,
+    status: "error",
+    error,
+  };
 }
 
 function unavailableLayer(
@@ -134,10 +169,31 @@ export function layerEvidence(
   };
 }
 
+export function convergenceEvidence(command: string[], execution: CommandExecution): LayerEvidence {
+  const evidence = layerEvidence("converge", command, execution);
+  if (!evidence.output) return evidence;
+  if (evidence.output.operation !== "converge")
+    return invalidLayer(evidence, "coding-tooling returned a non-convergence result");
+
+  const data = evidence.output.data;
+  if (typeof data !== "object" || data === null || Array.isArray(data))
+    return invalidLayer(evidence, "coding-tooling convergence result did not contain object data");
+
+  const result = (data as Record<string, unknown>).result;
+  if (result !== "converged" && result !== "partial" && result !== "blocked")
+    return invalidLayer(evidence, "coding-tooling convergence result had an unknown result state");
+
+  if ((evidence.status === "passed") === (result === "blocked"))
+    return invalidLayer(evidence, "coding-tooling convergence result disagreed with its status");
+
+  return evidence;
+}
+
 function processEvidence(
   command: string,
   args: string[],
   execution: CommandExecution,
+  cwd?: string,
 ): ProcessEvidence {
   return {
     command: [command, ...args],
@@ -145,6 +201,156 @@ function processEvidence(
     stdout: execution.stdout,
     stderr: execution.stderr,
     error: execution.error,
+    cwd,
+  };
+}
+
+function parseStatusPorcelain(output: string): ParsedWorktree {
+  const records = output.split("\0");
+  const statusPorcelain: string[] = [];
+  const worktree: WorktreePathEvidence[] = [];
+
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (!record) continue;
+    if (record.length < 4 || record[2] !== " ") {
+      return { statusPorcelain, worktree, error: "Git returned malformed porcelain status" };
+    }
+
+    const status = record.slice(0, 2);
+    const path = record.slice(3);
+    if (!path) {
+      return { statusPorcelain, worktree, error: "Git returned an empty worktree path" };
+    }
+
+    let previousPath: string | undefined;
+    if (status.includes("R") || status.includes("C")) {
+      previousPath = records[index + 1] || undefined;
+      if (!previousPath) {
+        return { statusPorcelain, worktree, error: "Git returned an incomplete rename status" };
+      }
+      index += 1;
+    }
+
+    worktree.push(
+      previousPath
+        ? { status, path, previousPath, contentIdentity: null }
+        : { status, path, contentIdentity: null },
+    );
+    statusPorcelain.push(
+      previousPath ? `${status} ${previousPath} -> ${path}` : `${status} ${path}`,
+    );
+  }
+
+  return { statusPorcelain, worktree };
+}
+
+function gitlinkPaths(
+  root: string,
+  paths: string[],
+  runCommand: CommandRunner,
+  executions: ProcessEvidence[],
+): { paths: Set<string>; error?: string } {
+  const gitlinks = new Set<string>();
+
+  for (let start = 0; start < paths.length; start += worktreeHashBatchSize) {
+    const batch = paths.slice(start, start + worktreeHashBatchSize);
+    const stageArgs = ["ls-files", "--stage", "-z", "--", ...batch];
+    const stage = runCommand("git", stageArgs, root);
+    executions.push(processEvidence("git", stageArgs, stage, root));
+    if (stage.error || stage.exitCode !== 0) {
+      return {
+        paths: gitlinks,
+        error: stage.error ?? (stage.stderr.trim() || "Could not classify dirty worktree paths"),
+      };
+    }
+
+    for (const record of stage.stdout.split("\0")) {
+      if (!record) continue;
+      const separator = record.indexOf("\t");
+      if (separator < 0) {
+        return { paths: gitlinks, error: "Git returned malformed staged-path evidence" };
+      }
+      const metadata = record.slice(0, separator).trim().split(/\s+/);
+      const path = record.slice(separator + 1);
+      if (metadata.length < 3 || !path) {
+        return { paths: gitlinks, error: "Git returned malformed staged-path evidence" };
+      }
+      if (metadata[0] === "160000") gitlinks.add(path);
+    }
+  }
+
+  return { paths: gitlinks };
+}
+
+function repositoryContentIdentity(repository: RepositoryEvidence): string {
+  const worktree = sortedStrings(
+    repository.worktree.map((entry) =>
+      JSON.stringify([entry.status, entry.path, entry.previousPath ?? null, entry.contentIdentity]),
+    ),
+  );
+  return createHash("sha256")
+    .update(JSON.stringify({ head: repository.head, worktree }))
+    .digest("hex");
+}
+
+function fingerprintWorktree(
+  root: string,
+  worktree: WorktreePathEvidence[],
+  runCommand: CommandRunner,
+  executions: ProcessEvidence[],
+): { worktree: WorktreePathEvidence[]; error?: string } {
+  const paths = sortedStrings(
+    new Set(worktree.filter((entry) => !entry.status.includes("D")).map((entry) => entry.path)),
+  );
+  if (paths.length === 0) return { worktree };
+
+  const classified = gitlinkPaths(root, paths, runCommand, executions);
+  if (classified.error) return { worktree, error: classified.error };
+
+  const identities = new Map<string, string>();
+  const regularPaths = paths.filter((path) => !classified.paths.has(path));
+  for (let start = 0; start < regularPaths.length; start += worktreeHashBatchSize) {
+    const batch = regularPaths.slice(start, start + worktreeHashBatchSize);
+    const hashArgs = ["hash-object", "--no-filters", "--", ...batch];
+    const hash = runCommand("git", hashArgs, root);
+    executions.push(processEvidence("git", hashArgs, hash, root));
+    if (hash.error || hash.exitCode !== 0) {
+      return {
+        worktree,
+        error: hash.error ?? (hash.stderr.trim() || "Could not fingerprint dirty worktree paths"),
+      };
+    }
+
+    const hashes = hash.stdout.split(/\r?\n/).filter(Boolean);
+    if (hashes.length !== batch.length) {
+      return {
+        worktree,
+        error: "Git returned an unexpected number of worktree content identities",
+      };
+    }
+    for (let index = 0; index < batch.length; index += 1) {
+      identities.set(batch[index]!, `blob:${hashes[index]}`);
+    }
+  }
+
+  for (const path of sortedStrings(classified.paths)) {
+    const nested = repositoryEvidence(resolve(root, path), runCommand);
+    executions.push(...nested.executions);
+    if (nested.error) {
+      return {
+        worktree,
+        error: `Could not fingerprint dirty submodule ${path}: ${nested.error}`,
+      };
+    }
+    identities.set(path, `submodule:${repositoryContentIdentity(nested)}`);
+  }
+
+  return {
+    worktree: worktree.map((entry) => ({
+      ...entry,
+      contentIdentity: identities.get(entry.path) ?? null,
+    })),
   };
 }
 
@@ -152,39 +358,105 @@ export function repositoryEvidence(root: string, runCommand: CommandRunner): Rep
   const executions: ProcessEvidence[] = [];
   const headArgs = ["rev-parse", "HEAD"];
   const head = runCommand("git", headArgs, root);
-  executions.push(processEvidence("git", headArgs, head));
+  executions.push(processEvidence("git", headArgs, head, root));
   if (head.error || head.exitCode !== 0) {
     return {
       root,
       head: null,
       clean: null,
       statusPorcelain: [],
+      worktree: [],
       executions,
       error: head.error ?? (head.stderr.trim() || "Could not resolve repository HEAD"),
     };
   }
 
-  const statusArgs = ["status", "--porcelain=v1"];
+  const statusArgs = ["status", "--porcelain=v1", "-z", "--untracked-files=all"];
   const status = runCommand("git", statusArgs, root);
-  executions.push(processEvidence("git", statusArgs, status));
+  executions.push(processEvidence("git", statusArgs, status, root));
   if (status.error || status.exitCode !== 0) {
     return {
       root,
       head: head.stdout.trim(),
       clean: null,
       statusPorcelain: [],
+      worktree: [],
       executions,
       error: status.error ?? (status.stderr.trim() || "Could not inspect repository worktree"),
     };
   }
 
-  const statusPorcelain = status.stdout.split(/\r?\n/).filter(Boolean);
+  const parsed = parseStatusPorcelain(status.stdout);
+  if (parsed.error) {
+    return {
+      root,
+      head: head.stdout.trim(),
+      clean: null,
+      statusPorcelain: parsed.statusPorcelain,
+      worktree: parsed.worktree,
+      executions,
+      error: parsed.error,
+    };
+  }
+
+  const fingerprinted = fingerprintWorktree(root, parsed.worktree, runCommand, executions);
+  if (fingerprinted.error) {
+    return {
+      root,
+      head: head.stdout.trim(),
+      clean: parsed.worktree.length === 0,
+      statusPorcelain: parsed.statusPorcelain,
+      worktree: fingerprinted.worktree,
+      executions,
+      error: fingerprinted.error,
+    };
+  }
+
   return {
     root,
     head: head.stdout.trim(),
-    clean: statusPorcelain.length === 0,
-    statusPorcelain,
+    clean: parsed.worktree.length === 0,
+    statusPorcelain: parsed.statusPorcelain,
+    worktree: fingerprinted.worktree,
     executions,
+  };
+}
+
+function worktreeStateByPath(repository: RepositoryEvidence): Map<string, string> {
+  const state = new Map<string, string>();
+  for (const entry of repository.worktree) {
+    state.set(
+      entry.path,
+      JSON.stringify([entry.status, entry.previousPath ?? null, entry.contentIdentity]),
+    );
+    if (entry.previousPath) {
+      state.set(entry.previousPath, JSON.stringify(["rename-source", entry.path]));
+    }
+  }
+  return state;
+}
+
+export function repositoryDelta(
+  before: RepositoryEvidence,
+  after: RepositoryEvidence,
+): RepositoryDelta {
+  const headChanged =
+    before.head === null || after.head === null ? null : before.head !== after.head;
+  if (before.error || after.error) {
+    return { headChanged, worktreeChanged: null, changedPaths: [] };
+  }
+
+  const beforeState = worktreeStateByPath(before);
+  const afterState = worktreeStateByPath(after);
+  const paths = new Set([...beforeState.keys(), ...afterState.keys()]);
+  const changedPaths = sortedStrings(
+    [...paths].filter((path) => beforeState.get(path) !== afterState.get(path)),
+  );
+
+  return {
+    headChanged,
+    worktreeChanged: changedPaths.length > 0,
+    changedPaths,
   };
 }
 
@@ -226,5 +498,82 @@ export function validateRepository(
     }
   }
 
+  return report;
+}
+
+export function convergeRepository(
+  root: string,
+  tooling: ToolingInvocation,
+  dependencies: HarnessDependencies = {},
+): ConvergenceReport {
+  const runCommand = dependencies.runCommand ?? defaultRunCommand;
+  const resolvedRoot = resolve(root);
+  const repositoryBefore = repositoryEvidence(resolvedRoot, runCommand);
+  const report: ConvergenceReport = {
+    schemaVersion: 1,
+    operation: "converge",
+    status: "passed",
+    repositoryBefore,
+    repositoryAfter: null,
+    repositoryDelta: null,
+    validationDelta: null,
+    tooling: { ...tooling },
+    convergence: null,
+    validation: null,
+    stoppedAt: null,
+  };
+
+  if (repositoryBefore.error) {
+    report.status = "error";
+    report.stoppedAt = "repository-before";
+    return report;
+  }
+
+  const args = [...tooling.prefixArgs, "converge", "--no-verify", "--json"];
+  const command = [tooling.command, ...args];
+  const execution = runCommand(tooling.command, args, resolvedRoot);
+  const convergence = convergenceEvidence(command, execution);
+  report.convergence = convergence;
+
+  if (convergence.status !== "passed") {
+    const repositoryAfter = repositoryEvidence(resolvedRoot, runCommand);
+    report.repositoryAfter = repositoryAfter;
+    report.repositoryDelta = repositoryDelta(repositoryBefore, repositoryAfter);
+    if (repositoryAfter.error) {
+      report.status = "error";
+      report.stoppedAt = "repository-after";
+      return report;
+    }
+    report.status = convergence.status;
+    report.stoppedAt = "converge";
+    return report;
+  }
+
+  const validation = validateRepository(resolvedRoot, tooling, { runCommand });
+  report.validation = validation;
+
+  const repositoryAfter = repositoryEvidence(resolvedRoot, runCommand);
+  report.repositoryAfter = repositoryAfter;
+  report.repositoryDelta = repositoryDelta(repositoryBefore, repositoryAfter);
+  report.validationDelta = repositoryDelta(validation.repository, repositoryAfter);
+
+  if (repositoryAfter.error) {
+    report.status = "error";
+    report.stoppedAt = "repository-after";
+    return report;
+  }
+
+  if (
+    report.validationDelta.headChanged === true ||
+    report.validationDelta.worktreeChanged === true
+  ) {
+    report.status = "error";
+    report.stoppedAt = "validation:repository-mutated";
+    return report;
+  }
+
+  report.status = validation.status;
+  if (validation.status !== "passed")
+    report.stoppedAt = `validation:${validation.stoppedAt ?? "unknown"}`;
   return report;
 }

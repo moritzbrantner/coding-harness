@@ -1,11 +1,11 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, extname, resolve } from "node:path";
 
-import { validateRepository, type ToolingInvocation } from "./harness.ts";
+import { convergeRepository, validateRepository, type ToolingInvocation } from "./harness.ts";
 import type { ResultStatus } from "./model.ts";
 
 export type CliOptions = {
-  command: "validate";
+  command: "validate" | "converge";
   root: string;
   tooling: string;
   report: string;
@@ -15,18 +15,21 @@ export type CliOptions = {
 function usage(message?: string): never {
   if (message) console.error(message);
   console.error(
-    "Usage: coding-harness validate [--root <path>] [--tooling <command-or-path>] [--report <path>] [--json]",
+    "Usage: coding-harness <validate|converge> [--root <path>] [--tooling <command-or-path>] [--report <path>] [--json]",
   );
   process.exit(2);
 }
 
 export function parseCli(argv: string[]): CliOptions {
   const [command, ...rest] = argv;
-  if (command !== "validate") usage();
+  if (command !== "validate" && command !== "converge") usage();
 
   let root = process.cwd();
   let tooling = process.env.CODING_TOOLING_BIN ?? "coding-tooling";
-  let report = ".artifacts/coding-harness/validation.json";
+  let report =
+    command === "validate"
+      ? ".artifacts/coding-harness/validation.json"
+      : ".artifacts/coding-harness/convergence.json";
   let json = false;
 
   for (let index = 0; index < rest.length; index += 1) {
@@ -61,7 +64,11 @@ function exitCode(status: ResultStatus): number {
 
 export function main(argv = process.argv.slice(2)): number {
   const options = parseCli(argv);
-  const result = validateRepository(options.root, resolveToolingInvocation(options.tooling));
+  const tooling = resolveToolingInvocation(options.tooling);
+  const result =
+    options.command === "validate"
+      ? validateRepository(options.root, tooling)
+      : convergeRepository(options.root, tooling);
   const reportPath = resolve(options.root, options.report);
   mkdirSync(dirname(reportPath), { recursive: true });
   writeFileSync(reportPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");

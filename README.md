@@ -4,7 +4,7 @@ Personal orchestration for taking a repository from inspection to deterministic 
 
 `coding-harness` sits above `coding-tooling`. The harness decides **which layer runs next and what evidence must be retained**; `coding-tooling` remains authoritative for component discovery, capabilities, conformance, findings, and repository-owned validation commands.
 
-## First vertical slice
+## Validation
 
 `validate` runs one fail-closed sequence against a target repository:
 
@@ -21,18 +21,36 @@ Each successful layer unlocks the next one. A failed, unavailable, malformed, or
 
 The default report is written to `.artifacts/coding-harness/validation.json`. It records the repository HEAD, whether the worktree was clean, every invoked command, exit code, and parsed machine-readable output.
 
+## Convergence
+
+`converge` adds one explicit mutation step before the same validation ladder:
+
+1. capture repository HEAD and worktree state;
+2. run `coding-tooling converge --no-verify --json`;
+3. stop immediately when deterministic convergence is blocked, unavailable, malformed, or process-status-inconsistent;
+4. otherwise run the normal harness validation sequence against the resulting worktree;
+5. re-observe repository state after validation and fail closed if validation itself changed Git-visible state;
+6. write one report containing convergence evidence, validation evidence, repository state before and after, convergence deltas, and validation-mutation deltas.
+
+The harness deliberately passes `--no-verify` to `coding-tooling converge`. `coding-tooling` remains authoritative for deterministic scaffolding, normalization, fixed-point/cycle detection, and semantic handoff generation, while the harness remains authoritative for validation-layer promotion. This avoids running the same verification twice.
+
+A `partial` tooling convergence result is still a successful deterministic fixed point and is therefore followed by validation. A blocked or otherwise non-passing convergence result is not. The harness snapshots the repository both before and after validation instead of assuming repository-owned build or test commands are read-only. A changed HEAD or changed dirty-path status/content during validation invalidates the run. Dirty paths carry bounded content identities, so edits to files that were already dirty before convergence are still distinguished from unchanged pre-existing work without hashing the whole repository.
+
+The default convergence report is written to `.artifacts/coding-harness/convergence.json`.
+
 ## Usage
 
 With `coding-tooling` installed on `PATH`:
 
 ```bash
 coding-harness validate --root ../media-player
+coding-harness converge --root ../media-player
 ```
 
 Against a local `coding-tooling` checkout:
 
 ```bash
-coding-harness validate \
+coding-harness converge \
   --root ../media-player \
   --tooling /absolute/path/to/coding-tooling/src/entry.ts
 ```
@@ -40,7 +58,7 @@ coding-harness validate \
 For compact stdout:
 
 ```bash
-coding-harness validate --root ../media-player --json
+coding-harness converge --root ../media-player --json
 ```
 
 `CODING_TOOLING_BIN` may be used instead of `--tooling` for an installed executable.
@@ -56,4 +74,4 @@ This boundary is deliberate: the harness should not become another analyzer or a
 
 ## Next slices
 
-The next useful slices are explicit convergence orchestration (delegating mutation to `coding-tooling converge` and then rerunning layered validation), environment bootstrap/verification, hosted/Pages acceptance, and finally fleet execution. Those should reuse this evidence contract instead of adding parallel report formats.
+The next useful slices are environment bootstrap/verification, hosted/Pages acceptance, and finally fleet execution. Those should reuse the existing evidence contracts instead of adding parallel report formats.
