@@ -95,10 +95,11 @@ export class AgentTraceRecorder {
     this.assertOpen();
     if (this.invocationIds.has(input.id)) throw new Error(`duplicate invocation id ${input.id}`);
 
+    const startedAt = this.readClock(`invocation ${input.id} start`);
     const open: OpenInvocation = {
       input: { ...input },
       sequence: this.nextSequence++,
-      startedAt: this.readClock(`invocation ${input.id} start`),
+      startedAt,
     };
     this.invocationIds.add(input.id);
     this.openInvocations.set(input.id, open);
@@ -121,10 +122,11 @@ export class AgentTraceRecorder {
       throw new Error(`span ${input.id} references unknown invocation ${input.invocationId}`);
     }
 
+    const startedAt = this.readClock(`span ${input.id} start`);
     const open: OpenSpan = {
       input: { ...input },
       sequence: this.nextSequence++,
-      startedAt: this.readClock(`span ${input.id} start`),
+      startedAt,
     };
     this.spanIds.add(input.id);
     this.openSpans.set(input.id, open);
