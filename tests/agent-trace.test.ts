@@ -103,8 +103,8 @@ test("assigns sequence at start so completion order cannot rewrite causality", (
   assert.deepEqual(
     trace.invocations.map((item) => [item.id, item.sequence, item.durationMs]),
     [
-      ["review-1", 2, 10],
       ["inspect-1", 1, 30],
+      ["review-1", 2, 10],
     ],
   );
 });
