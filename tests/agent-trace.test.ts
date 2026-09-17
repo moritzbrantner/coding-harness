@@ -168,8 +168,7 @@ test("rejects backwards clocks and use after finalization", () => {
   recorder.finish("passed");
 
   assert.throws(
-    () =>
-      recorder.startSpan({ id: "tool-1", kind: "tool", name: "repository-search" }),
+    () => recorder.startSpan({ id: "tool-1", kind: "tool", name: "repository-search" }),
     /already finished/,
   );
   assert.throws(() => recorder.finish("passed"), /already finished/);
