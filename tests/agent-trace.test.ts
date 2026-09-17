@@ -109,6 +109,57 @@ test("assigns sequence at start so completion order cannot rewrite causality", (
   );
 });
 
+test("rejects clock regressions between operations without consuming sequence", () => {
+  const clock = controlledClock();
+  const recorder = new AgentTraceRecorder({
+    runId: "run-recorder-global-clock",
+    taskHash,
+    now: clock.now,
+  });
+
+  clock.set(1100);
+  const first = recorder.startInvocation({
+    id: "inspect-1",
+    stage: "inspect",
+    provider: "openai",
+    model: "example-model",
+  });
+
+  clock.set(1050);
+  assert.throws(
+    () =>
+      recorder.startInvocation({
+        id: "review-1",
+        stage: "review",
+        provider: "openai",
+        model: "example-model",
+      }),
+    /clock moved backwards/,
+  );
+
+  clock.set(1110);
+  const second = recorder.startInvocation({
+    id: "review-1",
+    stage: "review",
+    provider: "openai",
+    model: "example-model",
+  });
+  clock.set(1120);
+  first.finish({ status: "passed" });
+  clock.set(1130);
+  second.finish({ status: "passed" });
+  clock.set(1140);
+
+  const trace = recorder.finish("passed");
+  assert.deepEqual(
+    trace.invocations.map((item) => [item.id, item.sequence]),
+    [
+      ["inspect-1", 1],
+      ["review-1", 2],
+    ],
+  );
+});
+
 test("fails closed on duplicate ids, unknown invocation references, and open work", () => {
   const clock = controlledClock();
   const recorder = new AgentTraceRecorder({ runId: "run-recorder-3", taskHash, now: clock.now });
