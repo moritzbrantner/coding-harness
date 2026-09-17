@@ -474,7 +474,8 @@ function accumulateInvocation(
 
 function tokenObject(source: InvocationAccumulator): StageTotal["tokens"] {
   const tokens: StageTotal["tokens"] = {};
-  if (source.invocations > 0 && source.inputReported === source.invocations) tokens.input = source.input;
+  if (source.invocations > 0 && source.inputReported === source.invocations)
+    tokens.input = source.input;
   if (source.invocations > 0 && source.cachedInputReported === source.invocations)
     tokens.cached_input = source.cachedInput;
   if (source.invocations > 0 && source.outputReported === source.invocations)
