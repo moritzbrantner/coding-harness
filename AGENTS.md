@@ -24,5 +24,5 @@
 ## Development
 
 - Keep the runtime dependency-free where practical.
-- Use Bun 1.4.0 for repository tests.
+- Use the latest stable Bun for repository tests.
 - Add focused tests for orchestration behavior before extending the execution graph.
